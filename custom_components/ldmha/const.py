@@ -1,7 +1,7 @@
 """Costanti dell'integrazione LDMHA."""
 
 DOMAIN = "ldmha"
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 
 PANEL_URL = "ldmha"
 PANEL_TITLE = "LDMHA"

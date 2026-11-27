@@ -85,7 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
         hass,
         frontend_url_path=PANEL_URL,
         webcomponent_name=PANEL_ELEMENT,
-        sidebar_title=f"{PANEL_TITLE} {VERSION}",  # versione installata accanto al nome nella barra laterale
+        sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
         module_url=f"{STATIC_URL}/ldmha-panel.js?v={VERSION}",
         embed_iframe=False,
