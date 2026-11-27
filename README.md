@@ -2,9 +2,7 @@
 
 # LDMHA
 
-[![HACS](https://img.shields.io/badge/HACS-Repository%20personalizzato-41BDF5.svg)](https://hacs.xyz)
-[![Release](https://img.shields.io/github/v/release/LabirintoDigitale/LDMHA)](https://github.com/LabirintoDigitale/LDMHA/releases)
-[![MusikHa APK](https://img.shields.io/badge/MusikHa-scarica%20l'APK-8A2BE2.svg)](https://github.com/LabirintoDigitale/LDMHA/raw/apk/MusikHa.apk)
+**[⬇ Scarica l'app MusikHa (APK)](https://github.com/LabirintoDigitale/LDMHA/raw/apk/MusikHa.apk)** · [Versioni di LDMHA](https://github.com/LabirintoDigitale/LDMHA/releases) · [Installa con HACS](#installazione)
 
 Due strumenti per la musica di casa con **Home Assistant** e **Music Assistant**:
 
