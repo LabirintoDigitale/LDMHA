@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.0";
+const PANEL_VERSION = "0.7.1";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -323,6 +323,10 @@ class LdmhaPanel extends HTMLElement {
     scan.count = this.rows.size;
     this.markDups();
     this.preview([...this.rows.values()].filter((r) => r.edit && r.status === "trovato"));
+    // cartella appena scelta: tutti i brani dell'elenco (con il filtro attuale) già selezionati, pronti per le azioni
+    this.refreshView();
+    for (const r of this.view) this.sel.add(r.file.path);
+    this.renderTop();
     redraw(true);
   }
 
