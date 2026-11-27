@@ -69,7 +69,7 @@ Il **lettore di Music Assistant a tutto schermo**, collegato a Home Assistant: c
 - Accesso con utente e password di Home Assistant (la password non viene salvata).
 - Scegli il lettore di Music Assistant da comandare; nell'elenco quelli che suonano stanno in cima, con pausa e stop su ogni riga.
 - **Si aggiorna da sola**: all'avvio controlla se c'è una versione nuova e propone di installarla.
-- Chiudendo l'app (✕ in alto) si fermano tutti i lettori attivi.
+- Chiudendo l'app (✕ in alto) si fermano i lettori su cui la musica l'ha fatta partire lei; quelli avviati da altre app restano accesi.
 - Con l'integrazione [Navigator](https://github.com/LabirintoDigitale/ha-navigator) installata, il telefono diventa anche un lettore su cui Music Assistant può suonare.
 
 **Installazione**: apri il link dal telefono, scarica l'APK e installalo (Android chiede di consentire l'installazione da questa fonte la prima volta).
