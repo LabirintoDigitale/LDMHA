@@ -17,7 +17,8 @@
     },
     "error": {
       "invalid_roots": "Indica cartelle con il percorso completo (es. /media)",
-      "no_roots": "Nessuna di queste cartelle esiste"
+      "no_roots": "Nessuna di queste cartelle esiste",
+      "invalid_key": "AcoustID ha rifiutato questa chiave: serve la API key dell'applicazione (acoustid.org → My applications), non quella dell'account."
     },
     "abort": {
       "single_instance_allowed": "LDMHA è già configurato."
@@ -41,7 +42,8 @@
     },
     "error": {
       "invalid_roots": "Indica cartelle con il percorso completo (es. /media)",
-      "no_roots": "Nessuna di queste cartelle esiste"
+      "no_roots": "Nessuna di queste cartelle esiste",
+      "invalid_key": "AcoustID ha rifiutato questa chiave: serve la API key dell'applicazione (acoustid.org → My applications), non quella dell'account."
     }
   }
 }

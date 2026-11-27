@@ -173,7 +173,8 @@ class Identifier:
         self.fpcalc = fpcalc
         self.key = key
         self.shazam = shazam  # ShazamRecognizer o None (disattivato nelle opzioni)
-        self.key_error = ""  # AcoustID ha rifiutato la chiave (non si riprova fino al riavvio o al cambio chiave)
+        self.key_error = ""  # AcoustID ha rifiutato la chiave: non si riprova a ogni brano, ma dopo 10 minuti sì
+        self.key_error_t = 0.0
         self._ac = _Throttle(0.35)
         self._mb = _Throttle(1.1)
         self._mb_cache: dict[str, dict] = {}
@@ -222,6 +223,7 @@ class Identifier:
             if re.search(r"(?i)invalid.*(api|key|client)|api key", str(err)):
                 # chiave sbagliata: non si riprova a ogni brano (si torna a provare cambiando la chiave nelle opzioni)
                 self.key_error = str(err)
+                self.key_error_t = time.monotonic()
             raise
         if data.get("status") != "ok":
             err = data.get("error") or {}
@@ -351,6 +353,8 @@ class Identifier:
         except FpcalcError as err:
             log.append(f"Impronta audio non riuscita: {err}")
             note = f"Impronta audio non riuscita ({err})"
+        if self.key_error and time.monotonic() - self.key_error_t > 600:
+            self.key_error = ""  # si riprova: magari era un problema passeggero di AcoustID
         if fp:
             if not self.key:
                 log.append("AcoustID saltato: manca la chiave (opzioni dell'integrazione)")

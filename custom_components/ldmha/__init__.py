@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from . import ws_api
-from .config_flow import parse_roots
+from .config_flow import clean_key, parse_roots
 from .const import (
     CONF_ACOUSTID_KEY,
     CONF_ROOTS,
@@ -59,7 +59,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     players = Players(hass, entry.entry_id)  # lettori MusikHa (musica sul telefono)
     await players.async_load()
     entry.runtime_data = LdmhaData(library, fp, Identifier(
-        hass, fp, opts.get(CONF_ACOUSTID_KEY, ""), ShazamRecognizer(hass) if opts.get(CONF_SHAZAM, True) else None), players)
+        hass, fp, clean_key(opts.get(CONF_ACOUSTID_KEY, "")), ShazamRecognizer(hass) if opts.get(CONF_SHAZAM, True) else None), players)
     hass.data[DOMAIN] = entry
 
     # "servizio" nella scheda dell'integrazione: mostra la versione installata

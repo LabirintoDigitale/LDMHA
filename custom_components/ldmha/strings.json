@@ -17,7 +17,8 @@
     },
     "error": {
       "invalid_roots": "Use full paths (e.g. /media)",
-      "no_roots": "None of these folders exists"
+      "no_roots": "None of these folders exists",
+      "invalid_key": "AcoustID rejected this key: use the application API key (acoustid.org → My applications), not the account key."
     },
     "abort": {
       "single_instance_allowed": "LDMHA is already configured."
@@ -41,7 +42,8 @@
     },
     "error": {
       "invalid_roots": "Use full paths (e.g. /media)",
-      "no_roots": "None of these folders exists"
+      "no_roots": "None of these folders exists",
+      "invalid_key": "AcoustID rejected this key: use the application API key (acoustid.org → My applications), not the account key."
     }
   }
 }

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
+
+import aiohttp
 
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CONF_ACOUSTID_KEY, CONF_ROOTS, CONF_SHAZAM, DEFAULT_ROOTS, DOMAIN
 
@@ -26,6 +30,30 @@ def parse_roots(text: str) -> list[str]:
     return out
 
 
+def clean_key(v: Any) -> str:
+    """Chiave AcoustID senza spazi o caratteri invisibili copiati per sbaglio (le chiavi sono lettere e cifre)."""
+    return re.sub(r"[^A-Za-z0-9]", "", str(v or ""))
+
+
+async def key_problem(hass: HomeAssistant, key: str) -> str | None:
+    """Chiede ad AcoustID se la chiave va bene (con un'impronta finta): "invalid_key" se la rifiuta, None se va bene
+    o se AcoustID non risponde (in quel caso si accetta e lo si vedrà riconoscendo i brani)."""
+    if not key:
+        return None
+    try:
+        async with async_get_clientsession(hass).post(
+            "https://api.acoustid.org/v2/lookup",
+            data={"client": key, "duration": "30", "fingerprint": "AQAAAA", "format": "json"},
+            timeout=aiohttp.ClientTimeout(total=15)) as r:
+            j = await r.json(content_type=None)
+    except (aiohttp.ClientError, TimeoutError, ValueError):
+        return None
+    err = (j or {}).get("error") or {} if isinstance(j, dict) else {}
+    if err.get("code") == 4 or "api key" in str(err.get("message", "")).lower():
+        return "invalid_key"
+    return None
+
+
 def _check(user_input: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
     errors: dict[str, str] = {}
     roots = parse_roots(user_input.get(CONF_ROOTS) or DEFAULT_ROOTS)
@@ -33,7 +61,7 @@ def _check(user_input: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
         errors[CONF_ROOTS] = "invalid_roots"
     elif not any(os.path.isdir(r) for r in roots):
         errors[CONF_ROOTS] = "no_roots"
-    data = {CONF_ACOUSTID_KEY: str(user_input.get(CONF_ACOUSTID_KEY) or "").strip(), CONF_ROOTS: ", ".join(roots),
+    data = {CONF_ACOUSTID_KEY: clean_key(user_input.get(CONF_ACOUSTID_KEY)), CONF_ROOTS: ", ".join(roots),
             CONF_SHAZAM: bool(user_input.get(CONF_SHAZAM, True))}
     return data, errors
 
@@ -55,6 +83,8 @@ class LdmhaConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             data, errors = await self.hass.async_add_executor_job(_check, user_input)
+            if not errors and (bad := await key_problem(self.hass, data[CONF_ACOUSTID_KEY])):
+                errors[CONF_ACOUSTID_KEY] = bad
             if not errors:
                 return self.async_create_entry(title="LDMHA", data={}, options=data)
         return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors,
@@ -71,6 +101,8 @@ class LdmhaOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             data, errors = await self.hass.async_add_executor_job(_check, user_input)
+            if not errors and (bad := await key_problem(self.hass, data[CONF_ACOUSTID_KEY])):
+                errors[CONF_ACOUSTID_KEY] = bad
             if not errors:
                 return self.async_create_entry(data=data)
         values = {**self.config_entry.options, **(user_input or {})}
