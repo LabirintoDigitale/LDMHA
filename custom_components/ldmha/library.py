@@ -486,6 +486,7 @@ class Library:
         if tags:
             write_tags(real, tags)
         old_cover = None
+        cover_warn = ""
         if cover and cover_if_missing and read_cover(real):
             cover = None  # il file ha già una copertina e si è scelto di aggiungerla solo se manca
         if cover:
@@ -496,7 +497,11 @@ class Library:
                 with open(keep, "wb") as fh:
                     fh.write(prev[0])
                 old_cover = {"file": keep, "mime": prev[1]}
-            write_cover(real, cover[0], cover[1])
+            try:
+                write_cover(real, cover[0], cover[1])
+            except LibraryError as err:  # formato senza copertina o file che non la accetta: il resto si applica
+                cover_warn = f"copertina saltata: {err}"
+                cover, old_cover = None, None
         dst = real
         if new_name:
             rel = "/".join(clean_part(p) for p in new_name.split("/") if clean_part(p))
@@ -522,7 +527,10 @@ class Library:
         self.history.append(entry)
         new_tags = read_tags(dst)
         self._remember(real, dst, new_tags, applied=True)
-        return {"path": dst, "name": os.path.basename(dst), "tags": new_tags, "entry": entry}
+        out = {"path": dst, "name": os.path.basename(dst), "tags": new_tags, "entry": entry}
+        if cover_warn:
+            out["warning"] = cover_warn
+        return out
 
     def _remember(self, old: str, new: str, tags: dict, applied: bool) -> None:
         if not self.db:

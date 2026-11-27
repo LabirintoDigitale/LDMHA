@@ -272,9 +272,16 @@ async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
             real = d.library.check(msg["path"])
             if await hass.async_add_executor_job(read_cover, real):
                 url = ""  # il file ha già una copertina: non serve nemmeno scaricarla
-        cover = await _download_cover(hass, url) if url else None
+        cover, warn = None, ""
+        if url:
+            try:
+                cover = await _download_cover(hass, url)
+            except LibraryError as err:  # copertina mancante: tag e nome si applicano lo stesso
+                warn = f"copertina saltata: {err}"
         res = await hass.async_add_executor_job(d.library.apply, msg["path"], tags, name, cover, msg["cover_if_missing"])
         await d.library.async_commit()
+        if warn:
+            res["warning"] = "; ".join(x for x in (warn, res.get("warning", "")) if x)
         return res
     await _run(connection, msg["id"], go())
 

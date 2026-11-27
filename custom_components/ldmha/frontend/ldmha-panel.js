@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.3";
+const PANEL_VERSION = "0.7.4";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -780,7 +780,7 @@ class LdmhaPanel extends HTMLElement {
       r.file.tags = res.tags;
       r.entry = res.entry; r.status = "fatto"; r.fileCover = undefined;
       this.settled(r);
-      this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}`, old, "ok");
+      this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}${res.warning ? ` (${res.warning})` : ""}`, old, "ok");
     } catch (e) { r.status = "trovato"; r.err = e.message || String(e); this.log(`Applica non riuscito: ${r.err}`, r.file.path, "ko"); }
     this.touch(r);
   }
