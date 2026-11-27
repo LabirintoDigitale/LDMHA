@@ -13,11 +13,3 @@ jobs:
       - uses: actions/checkout@v5
       - uses: home-assistant/actions/hassfest@master
 
-  hacs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: hacs/action@main
-        with:
-          category: integration
-          # la licenza PolyForm Strict non è tra quelle che GitHub riconosce: HACS la segnalerebbe come errore
-          ignore: brands license

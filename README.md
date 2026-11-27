@@ -2,7 +2,7 @@
 
 <h1 align="center">LDMHA</h1>
 
-<p align="center"><b><a href="https://github.com/LabirintoDigitale/LDMHA/raw/apk/MusikHa.apk">⬇ Scarica l'app MusikHa (APK)</a></b> · <a href="https://github.com/LabirintoDigitale/LDMHA/releases">Versioni di LDMHA</a> · <a href="#installazione">Installa con HACS</a></p>
+<p align="center"><b><a href="https://github.com/LabirintoDigitale/LDMHA/raw/apk/MusikHa.apk">⬇ Scarica l'app MusikHa (APK)</a></b> · <a href="https://github.com/LabirintoDigitale/LDMHA/releases">Versioni di LDMHA</a> · <a href="#installazione">Installa dal Marketplace</a></p>
 
 Due strumenti per la musica di casa con **Home Assistant** e **Music Assistant**:
 
@@ -36,7 +36,7 @@ Dopo le modifiche, Music Assistant vede i nomi e i tag nuovi alla prossima sincr
 
 ### Installazione
 
-1. HACS → menu ⋮ → *Repository personalizzati* → `https://github.com/LabirintoDigitale/LDMHA`, categoria *Integrazione* → installa **LDMHA** e **riavvia** Home Assistant.
+1. **Marketplace** → menu ⋮ → *Repository personalizzati* → `https://github.com/LabirintoDigitale/LDMHA`, categoria *Integrazione* → installa **LDMHA** e **riavvia** Home Assistant.
 2. *Impostazioni → Dispositivi e servizi → Aggiungi integrazione → LDMHA*.
 3. **Chiave AcoustID** (gratuita): crea un'applicazione su https://acoustid.org/new-application e copia la chiave. Senza chiave i brani si cercano solo per nome e tag.
 4. **Cartelle della musica**, separate da virgola (predefinita `/media`). LDMHA legge e rinomina solo lì dentro.
