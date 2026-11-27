@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.8.1";
+const PANEL_VERSION = "0.8.2";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -147,7 +147,7 @@ class LdmhaPanel extends HTMLElement {
             .map(([v, t]) => `<option value="${v}" ${v === this.s.cover ? "selected" : ""}>${t}</option>`).join("")}</select>
       </div>
       <div class="bar acts">
-        ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
+        ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>${this.s.job ? `<span id="working" class="hint wk">${(this.s.working || []).length ? `ora: ${esc(this.s.working.map(base).join(" · "))}` : ""}</span>` : ""}`
           : `<button id="idall" class="pri" ${n ? "" : "disabled"} title="Riconosce i brani selezionati non ancora riconosciuti (se lo sono già tutti, chiede se rifarli)">Riconosci selezionati${n ? ` (${n})` : ""}</button>`}
         <button id="safe" ${run ? `disabled title="Aspetta che finisca (o premi Ferma)"` : `title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}"`}>Applica i sicuri</button>
         <span class="sep"></span>
@@ -771,12 +771,19 @@ class LdmhaPanel extends HTMLElement {
       const was = this.s.job;
       this.s.job = !!ev.running;
       this.s.running = !!ev.running || (this.s.running && !was && this.s.runLabel !== "riconosco");
-      if (ev.running) { this.s.runLabel = "riconosco"; this.s.done = ev.done; this.s.total = ev.total; }
+      if (ev.running) { this.s.runLabel = "riconosco"; this.s.done = ev.done; this.s.total = ev.total; this.s.working = ev.working || []; }
       if (was && !ev.running) {
         this.log(`Riconoscimento ${ev.stopped ? "fermato" : "finito"}: ${ev.done} brani su ${ev.total}`);
         this.refreshView();
       }
       this.renderTop();
+      return;
+    }
+    if (ev.type === "working") {
+      // brani in lavorazione adesso: si vede che il riconoscimento è vivo anche quando un brano è lento
+      this.s.working = ev.working || [];
+      const w = this.shadowRoot.getElementById("working");
+      if (w) w.textContent = this.s.working.length ? `ora: ${this.s.working.map(base).join(" · ")}` : "";
       return;
     }
     if (ev.type !== "result") return;
@@ -1050,6 +1057,7 @@ button.pri { background: var(--primary-color); color: var(--text-primary-color, 
 .sep { width: 1px; height: 20px; background: var(--divider-color); margin: 0 4px; }
 .grow { flex: 1; text-align: right; }
 progress { width: 120px; }
+.wk { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint, .mut { color: var(--secondary-text-color); } .small { font-size: 12px; }
 .note { padding: 24px; text-align: center; color: var(--secondary-text-color); }
 .warn { background: rgba(255,152,0,.15); border-left: 4px solid var(--warning-color, #ff9800); padding: 6px 10px; border-radius: 6px; margin: 4px 0; }
