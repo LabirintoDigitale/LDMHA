@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.8";
+const PANEL_VERSION = "0.7.9";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -20,7 +20,7 @@ const PATTERNS = [
 const FIELDS = [["title", "Titolo"], ["artist", "Artista"], ["album", "Album"], ["albumartist", "Artista album"],
   ["date", "Anno"], ["tracknumber", "N."]];
 const FILTERS = [["aperti", "Da sistemare"], ["tutti", "Tutti (anche sistemati)"], ["dafare", "Da riconoscere"], ["proposte", "Con proposta"], ["sicuri", `Sicuri (≥ ${Math.round(SAFE * 100)}%)`],
-  ["incerti", "Incerti"], ["doppioni", "Doppioni"], ["nontrovati", "Non trovati / errori"], ["fatti", "Sistemati"], ["cestino", "Nel cestino"]];
+  ["incerti", "Incerti"], ["sospetti", "Artista sospetto (001…, ^_^)"], ["senzatag", "Senza artista o titolo"], ["doppioni", "Doppioni"], ["nontrovati", "Non trovati / errori"], ["fatti", "Sistemati"], ["cestino", "Nel cestino"]];
 const COLS = [["st", "", "62px"], ["name", "File", "minmax(180px,3fr)"], ["cur", "Tag attuali", "minmax(140px,2.2fr)"],
   ["prop", "Proposta", "minmax(140px,2.4fr)"], ["score", "%", "48px"], ["len", "Durata", "56px"]];
 
@@ -414,6 +414,8 @@ class LdmhaPanel extends HTMLElement {
       case "sicuri": if (!this.isSafe(r)) return false; break;
       case "incerti": if (!(r.status === "trovato" && !this.isSafe(r))) return false; break;
       case "doppioni": if (!r.dup) return false; break;
+      case "sospetti": if (r.status === "fatto" || r.status === "cestino" || !this.badArtist(r)) return false; break;
+      case "senzatag": if (r.status === "fatto" || r.status === "cestino" || (r.file.tags?.artist && r.file.tags?.title)) return false; break;
       case "nontrovati": if (!["nontrovato", "errore"].includes(r.status)) return false; break;
       case "fatti": if (r.status !== "fatto") return false; break;
       case "cestino": if (r.status !== "cestino") return false; break;
@@ -423,6 +425,14 @@ class LdmhaPanel extends HTMLElement {
     if (!q) return true;
     const t = r.file.tags || {}, c = r.edit || {};
     return [r.file.name, t.artist, t.title, t.album, c.artist, c.title, c.album].some((v) => v && String(v).toLowerCase().includes(q));
+  }
+
+  // artista scritto male nei tag: numero davanti («001 Red hot chili peppers»), niente lettere («^_^», «01»),
+  // o nomi che non dicono niente («Unknown Artist»); in Music Assistant diventano artisti a parte
+  badArtist(r) {
+    const t = r.file.tags || {};
+    return [t.artist, t.albumartist].some((a) => a && (/^\s*0\d{0,2}([\s._\-)]|$)/.test(a) || /^\s*\d{1,3}\s*[._\-)]\s*/.test(a) || !/\p{L}/u.test(a)
+      || /^(unknown( artist)?|artista sconosciuto|sconosciut[oa]|various|va|n\/?a|none|-+)$/i.test(a.trim())));
   }
 
   isSafe(r) { return !!(r.edit && r.cand && r.cand.source === "impronta" && r.cand.score >= SAFE && !r.dup && r.status === "trovato"); }
