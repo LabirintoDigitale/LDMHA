@@ -193,6 +193,7 @@ class Identifier:
         self.shazam = shazam  # ShazamRecognizer o None (disattivato nelle opzioni)
         self.key_error = ""  # AcoustID ha rifiutato la chiave: non si riprova a ogni brano, ma dopo 10 minuti sì
         self.key_error_t = 0.0
+        self.on_step = None  # (percorso, passaggio) -> None: chi vuole sapere a che punto è il riconoscimento
         self._ac = _Throttle(0.35)
         self._mb = _Throttle(1.1)
         self._mb_cache: dict[str, dict] = {}
@@ -342,7 +343,7 @@ class Identifier:
         """Seconda possibilità con Shazam; i dettagli (album, anno, numero) da MusicBrainz tramite il codice ISRC."""
         t0 = time.monotonic()
         try:
-            hit = await self.shazam.recognize(path, duration, log)
+            hit = await self.shazam.recognize(path, duration, log, step=lambda t: self._step(path, t))
         except ShazamError as err:
             log.append(f"Shazam: {err}")
             return []
@@ -396,12 +397,20 @@ class Identifier:
         full = _from_mb_recording(rec, cand.get("score", 0), cand.get("source", ""))
         return {**cand, **{k: v for k, v in full.items() if v and k not in ("score", "source")}}
 
+    def _step(self, path: str, text: str) -> None:
+        if self.on_step:
+            try:
+                self.on_step(path, text)
+            except Exception:  # noqa: BLE001 - solo informativo
+                pass
+
     async def identify(self, path: str, tags: dict[str, str]) -> dict[str, Any]:
         duration, cands, note, log = 0, [], "", []
         t_all = time.monotonic()
         fp = ""
         try:
             t0 = time.monotonic()
+            self._step(path, "impronta audio")
             duration, fp = await self.fpcalc.fingerprint(path)
             log.append(f"Impronta audio calcolata in {time.monotonic() - t0:.1f} s (primi {min(duration, 120)} s di "
                        f"{duration // 60}:{duration % 60:02d})")
@@ -419,6 +428,7 @@ class Identifier:
                 note = "Chiave AcoustID non valida: va messa la chiave dell'APPLICAZIONE (opzioni dell'integrazione)"
             else:
                 try:
+                    self._step(path, "AcoustID")
                     cands = await self.by_acoustid(duration, fp, log)
                     if not cands:
                         note = "Impronta audio non trovata su AcoustID"
@@ -432,6 +442,7 @@ class Identifier:
             log.append(f"Proposte dall'audio: {len(cands)}; la prima è «{cands[0]['artist']} — {cands[0]['title']}»")
             t0 = time.monotonic()
             before = dict(cands[0])
+            self._step(path, "MusicBrainz (dettagli)")
             cands[0] = await self.enrich(cands[0])
             got = [k for k in ("album", "year", "track") if cands[0].get(k) and cands[0].get(k) != before.get(k)]
             log.append(f"MusicBrainz ({time.monotonic() - t0:.1f} s): "
@@ -453,6 +464,7 @@ class Identifier:
                 log.append(f"Il titolo nei tag («{tags['title']}») non dice niente: ignorato")
             t0 = time.monotonic()
             try:
+                self._step(path, "MusicBrainz (per nome)")
                 cands = await self.by_text(artist, title, hints=hints)
                 if not cands and not artist and hints and title:
                     log.append("Niente con le cartelle: riprovo con il solo titolo (sicurezza ridotta)")

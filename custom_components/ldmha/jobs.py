@@ -52,9 +52,17 @@ class Jobs:
             except Exception:  # noqa: BLE001 - pannello chiuso nel frattempo
                 pass
 
+    @callback
+    def _on_step(self, path: str, text: str) -> None:
+        if not self.state.get("running"):
+            return
+        self.state.setdefault("steps", {})[path] = text
+        self._emit({"type": "step", "path": path, "step": text})
+
     def start(self, paths: list[str]) -> bool:
         if self.task and not self.task.done():
             return False
+        self.data.identifier.on_step = self._on_step
         self._stop = False
         self.state = {"running": True, "done": 0, "total": len(paths), "label": "riconosco", "t": time.time()}
         self._emit({"type": "state", **self.state})
@@ -91,6 +99,7 @@ class Jobs:
                     _LOGGER.exception("Riconoscimento di %s non riuscito", path)
                     ev["error"] = f"Errore imprevisto ({type(err).__name__}: {err})"
                 self.state["working"] = [p for p in self.state.get("working", []) if p != path]
+                self.state.get("steps", {}).pop(path, None)
                 self.state["done"] += 1
                 self._emit({**ev, "done": self.state["done"], "total": self.state["total"]})
 

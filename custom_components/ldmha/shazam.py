@@ -52,23 +52,28 @@ class ShazamRecognizer:
                 _LOGGER.warning("Shazam non disponibile: %s", err)
                 raise ShazamError(self._err) from err
 
-    async def recognize(self, path: str, duration: int = 0, log: list[str] | None = None) -> dict[str, Any] | None:
+    async def recognize(self, path: str, duration: int = 0, log: list[str] | None = None,
+                        step=None) -> dict[str, Any] | None:
         """Brano riconosciuto da Shazam (titolo, artista, album, anno, ISRC, copertina) o None. Prima il pezzo che
         sceglie Shazam; se non lo riconosce si provano altri pezzi del brano (a 30 secondi, a metà, a tre quarti),
         ritagliati con ffmpeg, fino al primo riconosciuto."""
         log = log if log is not None else []
+        step = step or (lambda _t: None)
+        ffmpeg = shutil.which("ffmpeg")
+        offsets = self._offsets(duration) if ffmpeg else []
+        tries = 1 + len(offsets)
+        step(f"Shazam tentativo 1 di {tries}")
         hit = await self._recognize_once(path)
         if hit:
             log.append("Shazam: riconosciuto al primo tentativo")
             return hit
-        ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             log.append("Shazam: primo pezzo non riconosciuto; ffmpeg non c'è, niente altri pezzi")
             return None
-        offsets = self._offsets(duration)
         log.append(f"Shazam: primo pezzo non riconosciuto, provo altri {len(offsets)} pezzi")
         with tempfile.TemporaryDirectory(prefix="ldmha_shazam_") as tmp:
             for n, off in enumerate(offsets, 1):
+                step(f"Shazam tentativo {n + 1} di {tries}")
                 part = os.path.join(tmp, f"pezzo{n}.wav")
                 if not await self._cut(ffmpeg, path, off, part):
                     log.append(f"Shazam: pezzo a {off // 60}:{off % 60:02d} non ritagliato")
