@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.5";
+const PANEL_VERSION = "0.7.6";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -142,13 +142,13 @@ class LdmhaPanel extends HTMLElement {
       <div class="bar acts">
         ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
           : `<button id="idall" class="pri" title="Riconosce i brani dell'elenco non ancora riconosciuti">Riconosci tutti</button>`}
-        <button id="safe" title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}">Applica i sicuri</button>
+        <button id="safe" ${run ? `disabled title="Aspetta che finisca (o premi Ferma)"` : `title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}"`}>Applica i sicuri</button>
         <span class="sep"></span>
         <span class="hint">${n ? `<b>${n}</b> selezionati:` : "Selezione:"}</span>
         <button id="sid" ${n && !run ? "" : "disabled"}>Riconosci</button>
-        <button id="sap" ${n ? "" : "disabled"}>Applica</button>
-        <button id="str" ${n ? "" : "disabled"}>Cestino</button>
-        <button id="snone" ${n ? "" : "disabled"}>Deseleziona</button>
+        <button id="sap" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Applica</button>
+        <button id="str" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Cestino</button>
+        <button id="snone" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Deseleziona</button>
         <span id="count" class="hint grow"></span>
       </div>`;
     const $ = (id) => top.querySelector("#" + id);
