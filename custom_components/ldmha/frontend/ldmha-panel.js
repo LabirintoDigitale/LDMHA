@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.6.0";
+const PANEL_VERSION = "0.6.1";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -112,7 +112,9 @@ class LdmhaPanel extends HTMLElement {
     const warn = [];
     if (i.version !== PANEL_VERSION) warn.push(`Pannello ${PANEL_VERSION}, integrazione ${i.version}: riavvia Home Assistant e ricarica la pagina.`);
     if (!i.acoustid) warn.push(`Manca la chiave AcoustID: i brani si cercano solo per nome e tag. Creala gratis su <a href="https://acoustid.org/new-application" target="_blank" rel="noopener">acoustid.org</a> e inseriscila nelle opzioni dell'integrazione LDMHA.`);
+    if (i.acoustid_error) warn.push(`<b>La chiave AcoustID è stata rifiutata</b> (${esc(i.acoustid_error)}): l'impronta audio non viene cercata. Su <a href="https://acoustid.org/my-applications" target="_blank" rel="noopener">acoustid.org → My applications</a> copia la <b>API key dell'applicazione</b> (non quella del tuo account) e mettila nelle opzioni dell'integrazione LDMHA.`);
     if (/non disponibile/.test(i.fpcalc)) warn.push(`Impronta audio ${esc(i.fpcalc)}.`);
+    if (/non disponibile/.test(i.shazam || "")) warn.push(`Shazam ${esc(i.shazam)}.`);
     if (!i.roots.length) warn.push(`Nessuna delle cartelle configurate esiste (${esc(i.configured.join(", "))}).`);
     const n = this.sel.size;
     const run = this.s.running;
@@ -597,6 +599,7 @@ class LdmhaPanel extends HTMLElement {
       r.cands = res.candidates || [];
       r.note = res.note || "";
       r.log = res.log || [];
+      if (res.key_error && this.s.info && this.s.info.acoustid_error !== res.key_error) { this.s.info.acoustid_error = res.key_error; this.renderTop(); }
       for (const line of r.log) this.log(line, r.file.path);
       r.status = r.cands.length ? "trovato" : "nontrovato";
       if (r.cands.length) this.choose(r, r.cands[0]); else r.edit = null;

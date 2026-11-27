@@ -121,11 +121,37 @@ def _from_mb_recording(rec: dict, score: float, source: str) -> dict[str, Any]:
 _NOISE = re.compile(r"\b(official|video|audio|lyrics?|hq|hd|remaster(ed)?|\d{3,4}kbps|320|mp3)\b", re.I)
 
 
-def guess_from_name(path: str, tags: dict[str, str]) -> tuple[str, str]:
-    """(artista, titolo) dai tag o, se mancano, dal nome del file («01 - Artista - Titolo (Official Video).mp3»)."""
-    artist, title = tags.get("artist", "").strip(), tags.get("title", "").strip()
+# titoli e artisti che non dicono niente (messi da programmi di copia dei CD o da chi ha scaricato il file)
+_GENERIC = re.compile(r"(?i)^\s*(track|traccia|pista|titolo|title|audio ?track|untitled|senza titolo|unknown|sconosciut[oa]|"
+                      r"unknown artist|artista sconosciuto|various( artists)?|artisti vari|va)?\s*\d*\s*$")
+_NOT_ARTIST = re.compile(r"(?i)^((cd|disc|disco)\s*\d+|\d{4}|live|singles?|bootlegs?|b-sides.*|discograph(y|ia).*|"
+                         r"musica.*|music|mp3|flac|varie|various|compilation.*|nas.*|media)$")
+
+
+def _useful(v: str) -> str:
+    v = (v or "").strip()
+    return "" if not v or _GENERIC.match(v) else v
+
+
+def guess_from_name(path: str, tags: dict[str, str]) -> tuple[str, str, list[str]]:
+    """(artista, titolo, indizi) dai tag o, se mancano o non dicono niente («Track22»), dal nome del file
+    («22_Road to Acceptance.mp3», «01 - Artista - Titolo (Official Video).mp3»). Gli indizi sono i nomi delle
+    cartelle sopra il file (es. «Greenday», «woodstock»): servono quando l'artista non c'è."""
+    artist, title = _useful(tags.get("artist", "")), _useful(tags.get("title", ""))
+    folders = []
+    d = os.path.dirname(path)
+    for _ in range(3):
+        n = os.path.basename(d)
+        if not n:
+            break
+        n2 = re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", n.replace("_", " "))
+        n2 = re.sub(r"^\s*\d{4}\s*[-–]\s*", "", n2)  # «1982 - Album» -> «Album»
+        n2 = re.sub(r"^\s*\d{1,3}\s*[-.)]\s*", "", n2).strip()  # «03. Bootlegs» -> «Bootlegs»
+        if n2 and not _NOT_ARTIST.match(n2):
+            folders.append(n2)
+        d = os.path.dirname(d)
     if artist and title:
-        return artist, title
+        return artist, title, folders
     name = os.path.splitext(os.path.basename(path))[0]
     name = re.sub(r"[_]+", " ", name)
     name = re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", name)
@@ -133,9 +159,8 @@ def guess_from_name(path: str, tags: dict[str, str]) -> tuple[str, str]:
     name = re.sub(r"^\s*\d{1,3}\s*[-.)_ ]\s*", "", name)
     parts = [p.strip() for p in re.split(r"\s+[-–—]\s+|\s*[-–—]{2,}\s*", name) if p.strip()]
     if len(parts) >= 2:
-        return artist or parts[0], title or " - ".join(parts[1:])
-    folder = os.path.basename(os.path.dirname(path))
-    return artist or (folder if not re.match(r"(?i)^(cd|disc)\s*\d", folder) else ""), title or name.strip()
+        return artist or parts[0], title or " - ".join(parts[1:]), folders
+    return artist, title or _useful(name.strip()), folders
 
 
 def _lucene(s: str) -> str:
@@ -148,6 +173,7 @@ class Identifier:
         self.fpcalc = fpcalc
         self.key = key
         self.shazam = shazam  # ShazamRecognizer o None (disattivato nelle opzioni)
+        self.key_error = ""  # AcoustID ha rifiutato la chiave (non si riprova fino al riavvio o al cambio chiave)
         self._ac = _Throttle(0.35)
         self._mb = _Throttle(1.1)
         self._mb_cache: dict[str, dict] = {}
@@ -184,22 +210,19 @@ class Identifier:
                 self._mb_cache.pop(next(iter(self._mb_cache)))
         return self._mb_cache[mbid]
 
-    async def by_fingerprint(self, path: str, log: list[str] | None = None) -> tuple[int, list[dict[str, Any]]]:
-        log = log if log is not None else []
+    async def by_acoustid(self, duration: int, fp: str, log: list[str]) -> list[dict[str, Any]]:
         t0 = time.monotonic()
-        duration, fp = await self.fpcalc.fingerprint(path)
-        log.append(f"Impronta audio calcolata in {time.monotonic() - t0:.1f} s (primi {min(duration, 120)} s di "
-                   f"{duration // 60}:{duration % 60:02d})")
-        if not self.key:
-            log.append("Nessuna chiave AcoustID: l'impronta non si può cercare")
-            return duration, []
-        t0 = time.monotonic()
-        data = await self._get(ACOUSTID_URL, {"client": self.key, "duration": duration, "fingerprint": fp,
-                                              "meta": "recordings releasegroups compress", "format": "json"},
-                               self._ac, method="POST")
+        try:
+            data = await self._get(ACOUSTID_URL, {"client": self.key, "duration": duration, "fingerprint": fp,
+                                                  "meta": "recordings releasegroups compress", "format": "json"},
+                                   self._ac, method="POST")
+        except IdentError as err:
+            if re.search(r"(?i)invalid.*(api|key|client)|api key", str(err)):
+                # chiave sbagliata: non si riprova a ogni brano (si torna a provare cambiando la chiave nelle opzioni)
+                self.key_error = str(err)
+            raise
         if data.get("status") != "ok":
             err = data.get("error") or {}
-            log.append(f"AcoustID ha risposto con un errore: {err.get('message') or 'sconosciuto'}")
             raise IdentError(f"AcoustID: {err.get('message') or 'errore'}")
         res = data.get("results") or []
         best = max((float(r.get("score") or 0) for r in res), default=0)
@@ -234,17 +257,27 @@ class Identifier:
                 uniq.append(c)
         return duration, uniq[:8]
 
-    async def by_text(self, artist: str, title: str, query: str = "") -> list[dict[str, Any]]:
+    async def by_text(self, artist: str, title: str, query: str = "", hints: list[str] | None = None) -> list[dict[str, Any]]:
+        weak = False
         if query:
             q = query
         elif artist and title:
             q = f'recording:"{_lucene(title)}" AND artist:"{_lucene(artist)}"'
+        elif title and hints:
+            # niente artista: le cartelle sopra il file come indizio (artista o album)
+            alt = " OR ".join(f'artist:"{_lucene(h)}" OR release:"{_lucene(h)}"' for h in hints)
+            q = f'recording:"{_lucene(title)}" AND ({alt})'
         elif title:
             q = f'recording:"{_lucene(title)}"'
+            weak = True
         else:
             return []
         data = await self._get(f"{MB_URL}/recording", {"query": q, "limit": 8, "fmt": "json"}, self._mb)
-        return [_from_mb_recording(r, (r.get("score") or 0) / 100, "nome") for r in data.get("recordings") or []]
+        out = [_from_mb_recording(r, (r.get("score") or 0) / 100, "nome") for r in data.get("recordings") or []]
+        if weak or query:  # solo il titolo (o testo libero): un nome uguale non vuol dire lo stesso brano
+            for c in out:
+                c["score"] = round(c["score"] * 0.7, 3)
+        return out
 
     async def by_shazam(self, path: str, log: list[str]) -> list[dict[str, Any]]:
         """Seconda possibilità con Shazam; i dettagli (album, anno, numero) da MusicBrainz tramite il codice ISRC."""
@@ -276,6 +309,17 @@ class Identifier:
                     log.append("MusicBrainz: ISRC non presente, restano i dati di Shazam")
             except IdentError as err:
                 log.append(f"MusicBrainz non disponibile per l'ISRC: {err}")
+        if not cand["mbid"] and cand["artist"] and cand["title"]:
+            # niente ISRC (o non su MusicBrainz): album e anno cercando artista e titolo dati da Shazam
+            try:
+                found = await self.by_text(cand["artist"], cand["title"])
+                if found:
+                    mb = found[0]
+                    cand = {**cand, **{k: v for k, v in mb.items() if v and k not in ("score", "source", "cover", "title", "artist")},
+                            "cover": cand["cover"] or mb.get("cover", "")}
+                    log.append(f"MusicBrainz: trovato con artista e titolo di Shazam (album «{mb.get('album') or '?'}»)")
+            except IdentError as err:
+                log.append(f"MusicBrainz non disponibile: {err}")
         return [cand]
 
     async def enrich(self, cand: dict[str, Any]) -> dict[str, Any]:
@@ -292,18 +336,31 @@ class Identifier:
     async def identify(self, path: str, tags: dict[str, str]) -> dict[str, Any]:
         duration, cands, note, log = 0, [], "", []
         t_all = time.monotonic()
+        fp = ""
         try:
-            duration, cands = await self.by_fingerprint(path, log)
-            if not self.key:
-                note = "Senza chiave AcoustID il riconoscimento dall'audio non è attivo: cerco per nome e tag"
-            elif not cands:
-                note = "Impronta audio non trovata su AcoustID: provo " + ("Shazam, poi " if self.shazam else "") + "per nome e tag"
+            t0 = time.monotonic()
+            duration, fp = await self.fpcalc.fingerprint(path)
+            log.append(f"Impronta audio calcolata in {time.monotonic() - t0:.1f} s (primi {min(duration, 120)} s di "
+                       f"{duration // 60}:{duration % 60:02d})")
         except FpcalcError as err:
             log.append(f"Impronta audio non riuscita: {err}")
-            note = f"Impronta audio non riuscita ({err}): cerco per nome e tag"
-        except IdentError as err:
-            log.append(f"AcoustID non disponibile: {err}")
-            note = f"{err}: cerco per nome e tag"
+            note = f"Impronta audio non riuscita ({err})"
+        if fp:
+            if not self.key:
+                log.append("AcoustID saltato: manca la chiave (opzioni dell'integrazione)")
+                note = "Senza chiave AcoustID il riconoscimento dall'audio non è attivo"
+            elif self.key_error:
+                log.append(f"AcoustID saltato: la chiave è stata rifiutata ({self.key_error})")
+                note = "Chiave AcoustID non valida: va messa la chiave dell'APPLICAZIONE (opzioni dell'integrazione)"
+            else:
+                try:
+                    cands = await self.by_acoustid(duration, fp, log)
+                    if not cands:
+                        note = "Impronta audio non trovata su AcoustID"
+                except IdentError as err:
+                    log.append(f"AcoustID non disponibile: {err}")
+                    note = ("Chiave AcoustID non valida: va messa la chiave dell'APPLICAZIONE (opzioni dell'integrazione)"
+                            if self.key_error else str(err))
         if cands:
             log.append(f"Proposte dall'audio: {len(cands)}; la prima è «{cands[0]['artist']} — {cands[0]['title']}»")
             t0 = time.monotonic()
@@ -314,16 +371,25 @@ class Identifier:
                        + (f"aggiunti {', '.join({'album': 'album', 'year': 'anno', 'track': 'numero di traccia'}[k] for k in got)}"
                           if got else "nessun dettaglio in più"))
         elif self.shazam is not None:
+            log.append("Provo con Shazam")
             cands = await self.by_shazam(path, log)
             if cands:
-                note = "Impronta non trovata su AcoustID: riconosciuto da Shazam (controlla prima di applicare)"
+                note = (note + " — " if note else "") + "riconosciuto da Shazam (controlla prima di applicare)"
+        else:
+            log.append("Shazam saltato: disattivato nelle opzioni dell'integrazione")
         if not cands:
-            artist, title = guess_from_name(path, tags)
+            artist, title, hints = guess_from_name(path, tags)
             log.append(f"Ricerca per nome su MusicBrainz: artista «{artist or '?'}», titolo «{title or '?'}»"
-                       + (" (dai tag)" if tags.get("artist") and tags.get("title") else " (dal nome del file)"))
+                       + (" (dai tag)" if _useful(tags.get("artist", "")) and _useful(tags.get("title", "")) else " (dal nome del file)")
+                       + (f", indizi dalle cartelle: {', '.join(hints)}" if not artist and hints else ""))
+            if tags.get("title") and not _useful(tags.get("title", "")):
+                log.append(f"Il titolo nei tag («{tags['title']}») non dice niente: ignorato")
             t0 = time.monotonic()
             try:
-                cands = await self.by_text(artist, title)
+                cands = await self.by_text(artist, title, hints=hints)
+                if not cands and not artist and hints and title:
+                    log.append("Niente con le cartelle: riprovo con il solo titolo (sicurezza ridotta)")
+                    cands = await self.by_text("", title)
                 if not cands and artist and title:
                     log.append("Nessun risultato esatto: riprovo con una ricerca libera")
                     cands = await self.by_text("", f"{artist} {title}", query=f"{_lucene(artist)} {_lucene(title)}")
@@ -346,4 +412,8 @@ class Identifier:
                    + (f"migliore «{cands[0]['artist']} — {cands[0]['title']}» al {round(cands[0]['score'] * 100)}%"
                       if cands else "nessuna proposta"))
         _LOGGER.debug("Riconoscimento di %s: %s", path, " | ".join(log))
-        return {"duration": duration, "candidates": cands, "note": note, "log": log}
+        if note and not cands:
+            note += " — nessuna proposta: prova «Cerca…»"
+        elif note and cands and cands[0].get("source") == "nome":
+            note += ": proposte cercate per nome, controllale"
+        return {"duration": duration, "candidates": cands, "note": note, "log": log, "key_error": self.key_error}

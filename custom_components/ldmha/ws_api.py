@@ -116,7 +116,7 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         roots = await hass.async_add_executor_job(d.library.real_roots)
         stats = await hass.async_add_executor_job(d.library.db.stats) if d.library.db else {}
         return {"version": VERSION, "roots": roots, "configured": d.library.roots, "db": stats,
-                "acoustid": bool(d.identifier.key), "fpcalc": d.fpcalc.status(),
+                "acoustid": bool(d.identifier.key), "acoustid_error": d.identifier.key_error, "fpcalc": d.fpcalc.status(),
                 "shazam": d.identifier.shazam.status() if d.identifier.shazam else "disattivato"}
     await _run(connection, msg["id"], go())
 
@@ -211,7 +211,7 @@ async def ws_search(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         artist, title, query = msg["artist"].strip(), msg["title"].strip(), msg["query"].strip()
         if not (artist or title or query) and msg.get("path"):
             real = d.library.check(msg["path"])
-            artist, title = guess_from_name(real, await hass.async_add_executor_job(read_tags, real))
+            artist, title, _hints = guess_from_name(real, await hass.async_add_executor_job(read_tags, real))
         if query:
             cands = await d.identifier.by_text("", "", query=query)
         else:
