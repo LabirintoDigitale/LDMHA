@@ -190,6 +190,8 @@ class Identifier:
                         await asyncio.sleep(2 + attempt * 3)
                         continue
                     data = await r.json(content_type=None)
+                    if not isinstance(data, dict):
+                        data = {}
                     if r.status >= 400:
                         msg = (data or {}).get("error", {})
                         msg = msg.get("message") if isinstance(msg, dict) else msg
@@ -286,6 +288,10 @@ class Identifier:
             hit = await self.shazam.recognize(path)
         except ShazamError as err:
             log.append(f"Shazam: {err}")
+            return []
+        except Exception as err:  # noqa: BLE001 - Shazam non deve mai fermare il riconoscimento
+            _LOGGER.exception("Shazam: errore imprevisto")
+            log.append(f"Shazam: errore imprevisto ({type(err).__name__}: {err})")
             return []
         if not hit:
             log.append(f"Shazam ({time.monotonic() - t0:.1f} s): brano non riconosciuto")

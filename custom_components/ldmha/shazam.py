@@ -51,10 +51,16 @@ class ShazamRecognizer:
     async def recognize(self, path: str) -> dict[str, Any] | None:
         """Brano riconosciuto da Shazam (titolo, artista, album, anno, ISRC, copertina) o None."""
         await self._ensure()
-        from shazamio import Shazam
+        try:
+            from shazamio import Shazam
+        except Exception as err:  # noqa: BLE001
+            raise ShazamError(f"libreria ShazamIO non caricabile ({err})") from err
 
         async with self._sem:
-            shazam = Shazam(language="it-IT", endpoint_country="IT")
+            try:
+                shazam = Shazam(language="it-IT", endpoint_country="IT")
+            except Exception as err:  # noqa: BLE001
+                raise ShazamError(f"Shazam non avviabile ({err})") from err
             try:
                 data = await asyncio.wait_for(shazam.recognize(path), 60)
             except TimeoutError as err:
@@ -66,7 +72,7 @@ class ShazamRecognizer:
                     await shazam.close()
                 except Exception:  # noqa: BLE001
                     pass
-        track = (data or {}).get("track") or {}
+        track = (data if isinstance(data, dict) else {}).get("track") or {}
         if not track.get("title"):
             return None
         meta: dict[str, str] = {}

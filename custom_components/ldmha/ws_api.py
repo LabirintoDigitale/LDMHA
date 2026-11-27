@@ -44,6 +44,10 @@ async def _run(connection, msg_id: int, coro) -> None:
         connection.send_result(msg_id, await coro)
     except (LibraryError, IdentError, FpcalcError) as err:
         connection.send_error(msg_id, "ldmha_error", str(err))
+    except Exception as err:  # noqa: BLE001 - errore imprevisto: nome e messaggio al pannello, dettagli nel registro
+        _LOGGER.exception("Errore imprevisto in LDMHA")
+        connection.send_error(msg_id, "ldmha_error",
+                              f"Errore imprevisto ({type(err).__name__}: {err}). Dettagli nel registro di Home Assistant (cerca «ldmha»)")
 
 
 # ---------------------------------------------------------------- lettori MusikHa (app sul telefono)
