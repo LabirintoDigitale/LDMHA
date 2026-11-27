@@ -10,7 +10,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 
-from .const import CONF_ACOUSTID_KEY, CONF_ROOTS, DEFAULT_ROOTS, DOMAIN
+from .const import CONF_ACOUSTID_KEY, CONF_ROOTS, CONF_SHAZAM, DEFAULT_ROOTS, DOMAIN
 
 # pagina dove si crea la chiave AcoustID (gratuita), mostrata nella descrizione del modulo
 PLACEHOLDERS = {"acoustid_url": "https://acoustid.org/new-application"}
@@ -33,7 +33,8 @@ def _check(user_input: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
         errors[CONF_ROOTS] = "invalid_roots"
     elif not any(os.path.isdir(r) for r in roots):
         errors[CONF_ROOTS] = "no_roots"
-    data = {CONF_ACOUSTID_KEY: str(user_input.get(CONF_ACOUSTID_KEY) or "").strip(), CONF_ROOTS: ", ".join(roots)}
+    data = {CONF_ACOUSTID_KEY: str(user_input.get(CONF_ACOUSTID_KEY) or "").strip(), CONF_ROOTS: ", ".join(roots),
+            CONF_SHAZAM: bool(user_input.get(CONF_SHAZAM, True))}
     return data, errors
 
 
@@ -41,6 +42,7 @@ def _schema(values: dict[str, Any]) -> vol.Schema:
     return vol.Schema({
         vol.Optional(CONF_ACOUSTID_KEY, default=values.get(CONF_ACOUSTID_KEY, "")): str,
         vol.Required(CONF_ROOTS, default=values.get(CONF_ROOTS, DEFAULT_ROOTS)): str,
+        vol.Optional(CONF_SHAZAM, default=values.get(CONF_SHAZAM, True)): bool,
     })
 
 

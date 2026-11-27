@@ -86,6 +86,114 @@ def write_tags(path: str, tags: dict[str, str], clear_missing: bool = False) -> 
         raise LibraryError(f"Tag non salvati: {err}") from err
 
 
+# ---------------------------------------------------------------- copertina dentro il file
+
+def read_cover(path: str) -> tuple[bytes, str] | None:
+    """Copertina già dentro il file (immagine, tipo) o None."""
+    from mutagen import File
+
+    try:
+        f = File(path)
+    except Exception:
+        return None
+    if f is None:
+        return None
+    try:
+        pics = getattr(f, "pictures", None)  # FLAC
+        if pics:
+            return pics[0].data, pics[0].mime or "image/jpeg"
+        tags = f.tags
+        if tags is None:
+            return None
+        if hasattr(tags, "getall"):  # MP3 (ID3)
+            apic = tags.getall("APIC")
+            if apic:
+                return apic[0].data, apic[0].mime or "image/jpeg"
+        if "covr" in tags:  # MP4 / M4A
+            c = tags["covr"][0]
+            return bytes(c), "image/png" if getattr(c, "imageformat", 0) == 14 else "image/jpeg"
+        if "metadata_block_picture" in tags:  # OGG / Opus
+            import base64
+            from mutagen.flac import Picture
+
+            p = Picture(base64.b64decode(tags["metadata_block_picture"][0]))
+            return p.data, p.mime or "image/jpeg"
+    except Exception:  # noqa: BLE001 - copertina rovinata: come se non ci fosse
+        return None
+    return None
+
+
+def write_cover(path: str, data: bytes, mime: str) -> None:
+    """Mette la copertina nel file (al posto di quella che c'era). MP3, FLAC, M4A, OGG e Opus."""
+    from mutagen import File
+
+    try:
+        f = File(path)
+    except Exception as err:
+        raise LibraryError(f"File non leggibile: {err}") from err
+    if f is None:
+        raise LibraryError("Formato senza copertina modificabile")
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".mp3":
+            from mutagen.id3 import APIC, ID3
+
+            if f.tags is None:
+                f.add_tags()
+            tags: ID3 = f.tags
+            tags.delall("APIC")
+            tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=data))
+        elif ext == ".flac":
+            from mutagen.flac import Picture
+
+            pic = Picture()
+            pic.type, pic.mime, pic.data = 3, mime, data
+            f.clear_pictures()
+            f.add_picture(pic)
+        elif ext in (".m4a", ".mp4", ".aac"):
+            from mutagen.mp4 import MP4Cover
+
+            if f.tags is None:
+                f.add_tags()
+            fmt = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+            f.tags["covr"] = [MP4Cover(data, imageformat=fmt)]
+        elif ext in (".ogg", ".oga", ".opus"):
+            import base64
+
+            from mutagen.flac import Picture
+
+            pic = Picture()
+            pic.type, pic.mime, pic.data = 3, mime, data
+            f["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+        else:
+            raise LibraryError(f"Copertina non supportata per i file {ext}")
+        f.save()
+    except LibraryError:
+        raise
+    except Exception as err:
+        raise LibraryError(f"Copertina non salvata: {err}") from err
+
+
+def remove_cover(path: str) -> None:
+    from mutagen import File
+
+    try:
+        f = File(path)
+        if f is None:
+            return
+        if hasattr(f, "clear_pictures"):
+            f.clear_pictures()
+        elif f.tags is not None and hasattr(f.tags, "delall"):
+            f.tags.delall("APIC")
+        elif f.tags is not None:
+            for k in ("covr", "metadata_block_picture"):
+                if k in f.tags:
+                    del f.tags[k]
+        f.save()
+    except Exception as err:  # noqa: BLE001
+        raise LibraryError(f"Copertina non tolta: {err}") from err
+
+
 # ---------------------------------------------------------------- nomi
 
 _BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -130,6 +238,9 @@ class Library:
         self.hass = hass
         self.roots = roots
         self.db = db  # archivio dei brani letti (db.Db), facoltativo
+        # copertine tolte dai file (per poterle rimettere annullando): file a parte, non nella cronologia
+        self.covers_dir = hass.config.path("ldmha", "copertine_tolte") if hass is not None else "/tmp/ldmha_copertine"
+
         self._store = Store(hass, 1, "ldmha.history")
         self.history: list[dict[str, Any]] = []
 
@@ -367,12 +478,25 @@ class Library:
                 return
             folder = os.path.dirname(folder)
 
-    def apply(self, path: str, tags: dict[str, str], new_name: str | None) -> dict[str, Any]:
+    def apply(self, path: str, tags: dict[str, str], new_name: str | None,
+              cover: tuple[bytes, str] | None = None, cover_if_missing: bool = False) -> dict[str, Any]:
         real = self.check(path)
         old_tags = read_tags(real)
         old_tags.pop("_length", None)
         if tags:
             write_tags(real, tags)
+        old_cover = None
+        if cover and cover_if_missing and read_cover(real):
+            cover = None  # il file ha già una copertina e si è scelto di aggiungerla solo se manca
+        if cover:
+            prev = read_cover(real)
+            if prev:  # la copertina di prima resta in un file a parte, per poterla rimettere annullando
+                os.makedirs(self.covers_dir, exist_ok=True)
+                keep = os.path.join(self.covers_dir, f"{time.time():.6f}.img")
+                with open(keep, "wb") as fh:
+                    fh.write(prev[0])
+                old_cover = {"file": keep, "mime": prev[1]}
+            write_cover(real, cover[0], cover[1])
         dst = real
         if new_name:
             rel = "/".join(clean_part(p) for p in new_name.split("/") if clean_part(p))
@@ -392,6 +516,9 @@ class Library:
                     raise LibraryError(f"Rinomina non riuscita: {err}") from err
         entry = {"id": f"{time.time():.6f}", "t": time.time(), "kind": "apply", "old": real, "new": dst,
                  "old_tags": old_tags, "tags": tags}
+        if cover:
+            entry["cover"] = True
+            entry["old_cover"] = old_cover
         self.history.append(entry)
         new_tags = read_tags(dst)
         self._remember(real, dst, new_tags, applied=True)
@@ -437,6 +564,13 @@ class Library:
                 raise LibraryError(f"Ripristino non riuscito: {err}") from err
         if entry["kind"] == "apply" and entry.get("tags"):
             write_tags(back, entry.get("old_tags") or {}, clear_missing=True)
+        if entry["kind"] == "apply" and entry.get("cover"):
+            oc = entry.get("old_cover")
+            if oc and os.path.isfile(oc.get("file", "")):
+                with open(oc["file"], "rb") as fh:
+                    write_cover(back, fh.read(), oc["mime"])
+            elif not oc:
+                remove_cover(back)
         entry["undone"] = time.time()
         self._remember(cur, back, read_tags(back), applied=False)
         return {"path": back}

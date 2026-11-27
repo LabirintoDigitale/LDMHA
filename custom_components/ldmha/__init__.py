@@ -17,6 +17,7 @@ from .config_flow import parse_roots
 from .const import (
     CONF_ACOUSTID_KEY,
     CONF_ROOTS,
+    CONF_SHAZAM,
     DATA_STATIC_REGISTERED,
     DEFAULT_ROOTS,
     DOMAIN,
@@ -32,6 +33,7 @@ from .fpcalc import Fpcalc
 from .ident import Identifier
 from .library import Library
 from .players import Players, StreamProxyView
+from .shazam import ShazamRecognizer
 
 PLATFORMS = ["media_player"]
 
@@ -56,7 +58,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     fp = Fpcalc(hass)
     players = Players(hass, entry.entry_id)  # lettori MusikHa (musica sul telefono)
     await players.async_load()
-    entry.runtime_data = LdmhaData(library, fp, Identifier(hass, fp, opts.get(CONF_ACOUSTID_KEY, "")), players)
+    entry.runtime_data = LdmhaData(library, fp, Identifier(
+        hass, fp, opts.get(CONF_ACOUSTID_KEY, ""), ShazamRecognizer(hass) if opts.get(CONF_SHAZAM, True) else None), players)
     hass.data[DOMAIN] = entry
 
     # "servizio" nella scheda dell'integrazione: mostra la versione installata
@@ -82,7 +85,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
         hass,
         frontend_url_path=PANEL_URL,
         webcomponent_name=PANEL_ELEMENT,
-        sidebar_title=PANEL_TITLE,
+        sidebar_title=f"{PANEL_TITLE} {VERSION}",  # versione installata accanto al nome nella barra laterale
         sidebar_icon=PANEL_ICON,
         module_url=f"{STATIC_URL}/ldmha-panel.js?v={VERSION}",
         embed_iframe=False,

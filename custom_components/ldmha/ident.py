@@ -18,6 +18,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import USER_AGENT
 from .fpcalc import Fpcalc, FpcalcError
+from .shazam import ShazamError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,10 +88,23 @@ def _track_no(rel: dict | None) -> str:
     return ""
 
 
+CAA = "https://coverartarchive.org"
+
+
+def _cover_rel(rel_id: str) -> str:
+    """Copertina dalla Cover Art Archive di MusicBrainz (piccola, per il pannello; per il file si usa la grande)."""
+    return f"{CAA}/release/{rel_id}/front-250" if rel_id else ""
+
+
+def _cover_rg(rg_id: str) -> str:
+    return f"{CAA}/release-group/{rg_id}/front-250" if rg_id else ""
+
+
 def _from_mb_recording(rec: dict, score: float, source: str) -> dict[str, Any]:
     rel = _pick_release(rec.get("releases"))
     rg = (rel or {}).get("release-group") or {}
     return {
+        "cover": _cover_rel((rel or {}).get("id", "")) or _cover_rg(rg.get("id", "")),
         "mbid": rec.get("id", ""),
         "title": rec.get("title", ""),
         "artist": _artist(rec.get("artist-credit")),
@@ -129,10 +143,11 @@ def _lucene(s: str) -> str:
 
 
 class Identifier:
-    def __init__(self, hass: HomeAssistant, fpcalc: Fpcalc, key: str) -> None:
+    def __init__(self, hass: HomeAssistant, fpcalc: Fpcalc, key: str, shazam=None) -> None:
         self.hass = hass
         self.fpcalc = fpcalc
         self.key = key
+        self.shazam = shazam  # ShazamRecognizer o None (disattivato nelle opzioni)
         self._ac = _Throttle(0.35)
         self._mb = _Throttle(1.1)
         self._mb_cache: dict[str, dict] = {}
@@ -207,7 +222,7 @@ class Identifier:
                     "mbid": rec["id"], "title": rec.get("title", ""), "artist": _acoustid_artist(rec.get("artists")),
                     "album": rg.get("title", ""), "albumartist": _acoustid_artist(rg.get("artists")),
                     "year": "", "track": "", "duration": rec.get("duration") or 0,
-                    "score": round(score, 3), "source": "impronta",
+                    "score": round(score, 3), "source": "impronta", "cover": _cover_rg(rg.get("id", "")),
                 })
         # stesso titolo e artista registrati più volte: resta il primo
         uniq: list[dict[str, Any]] = []
@@ -231,6 +246,38 @@ class Identifier:
         data = await self._get(f"{MB_URL}/recording", {"query": q, "limit": 8, "fmt": "json"}, self._mb)
         return [_from_mb_recording(r, (r.get("score") or 0) / 100, "nome") for r in data.get("recordings") or []]
 
+    async def by_shazam(self, path: str, log: list[str]) -> list[dict[str, Any]]:
+        """Seconda possibilità con Shazam; i dettagli (album, anno, numero) da MusicBrainz tramite il codice ISRC."""
+        t0 = time.monotonic()
+        try:
+            hit = await self.shazam.recognize(path)
+        except ShazamError as err:
+            log.append(f"Shazam: {err}")
+            return []
+        if not hit:
+            log.append(f"Shazam ({time.monotonic() - t0:.1f} s): brano non riconosciuto")
+            return []
+        log.append(f"Shazam ({time.monotonic() - t0:.1f} s): «{hit['artist']} — {hit['title']}»"
+                   + (f", album «{hit['album']}»" if hit["album"] else "") + (f", ISRC {hit['isrc']}" if hit["isrc"] else ""))
+        # Shazam non dà una percentuale: 85%, sotto la soglia di «Applica i sicuri» (si controlla prima di applicare)
+        cand = {"mbid": "", "title": hit["title"], "artist": hit["artist"], "album": hit["album"], "albumartist": "",
+                "year": hit["year"], "track": "", "duration": 0, "score": 0.85, "source": "shazam", "cover": hit["cover"]}
+        if hit["isrc"]:
+            try:
+                data = await self._get(f"{MB_URL}/isrc/{hit['isrc']}",
+                                       {"inc": "releases+release-groups+artist-credits+media", "fmt": "json"}, self._mb)
+                recs = data.get("recordings") or []
+                if recs:
+                    mb = _from_mb_recording(recs[0], 0.85, "shazam")
+                    cand = {**cand, **{k: v for k, v in mb.items() if v and k not in ("score", "source", "cover")},
+                            "cover": cand["cover"] or mb.get("cover", "")}
+                    log.append(f"MusicBrainz: ISRC trovato, aggiunti album, anno e numero di traccia")
+                else:
+                    log.append("MusicBrainz: ISRC non presente, restano i dati di Shazam")
+            except IdentError as err:
+                log.append(f"MusicBrainz non disponibile per l'ISRC: {err}")
+        return [cand]
+
     async def enrich(self, cand: dict[str, Any]) -> dict[str, Any]:
         """Album, anno e numero di traccia da MusicBrainz per un candidato trovato con l'impronta."""
         if not cand.get("mbid"):
@@ -250,7 +297,7 @@ class Identifier:
             if not self.key:
                 note = "Senza chiave AcoustID il riconoscimento dall'audio non è attivo: cerco per nome e tag"
             elif not cands:
-                note = "Impronta audio non trovata su AcoustID: cerco per nome e tag"
+                note = "Impronta audio non trovata su AcoustID: provo " + ("Shazam, poi " if self.shazam else "") + "per nome e tag"
         except FpcalcError as err:
             log.append(f"Impronta audio non riuscita: {err}")
             note = f"Impronta audio non riuscita ({err}): cerco per nome e tag"
@@ -266,7 +313,11 @@ class Identifier:
             log.append(f"MusicBrainz ({time.monotonic() - t0:.1f} s): "
                        + (f"aggiunti {', '.join({'album': 'album', 'year': 'anno', 'track': 'numero di traccia'}[k] for k in got)}"
                           if got else "nessun dettaglio in più"))
-        else:
+        elif self.shazam is not None:
+            cands = await self.by_shazam(path, log)
+            if cands:
+                note = "Impronta non trovata su AcoustID: riconosciuto da Shazam (controlla prima di applicare)"
+        if not cands:
             artist, title = guess_from_name(path, tags)
             log.append(f"Ricerca per nome su MusicBrainz: artista «{artist or '?'}», titolo «{title or '?'}»"
                        + (" (dai tag)" if tags.get("artist") and tags.get("title") else " (dal nome del file)"))

@@ -6,10 +6,12 @@
         "description": "LDMHA adds an admin-only sidebar panel to tidy up your music: it identifies tracks by their audio (AcoustID + MusicBrainz), fixes tags, renames files and removes duplicates.\n\nThe AcoustID key is free: create one at {acoustid_url} (without a key tracks are only searched by name and tags).",
         "data": {
           "acoustid_key": "AcoustID application key",
-          "roots": "Music folders (comma separated)"
+          "roots": "Music folders (comma separated)",
+          "shazam": "Shazam when the fingerprint finds nothing (unofficial service)"
         },
         "data_description": {
-          "roots": "For example /media, /media/nas_music. Network shares are mounted in Settings → System → Storage (usage \"Media\") and appear under /media."
+          "roots": "For example /media, /media/nas_music. Network shares are mounted in Settings → System → Storage (usage \"Media\") and appear under /media.",
+          "shazam": "Second chance with Shazam (ShazamIO library, installed automatically on first use). Shazam gives no confidence: its matches count as 85% and are not applied by «Apply safe ones»."
         }
       }
     },
@@ -28,10 +30,12 @@
         "description": "AcoustID key (free, from {acoustid_url}) and folders where LDMHA may read and rename tracks.",
         "data": {
           "acoustid_key": "AcoustID application key",
-          "roots": "Music folders (comma separated)"
+          "roots": "Music folders (comma separated)",
+          "shazam": "Shazam when the fingerprint finds nothing (unofficial service)"
         },
         "data_description": {
-          "roots": "For example /media, /media/nas_music."
+          "roots": "For example /media, /media/nas_music.",
+          "shazam": "Second chance with Shazam (ShazamIO library, installed automatically on first use). Shazam gives no confidence: its matches count as 85% and are not applied by «Apply safe ones»."
         }
       }
     },

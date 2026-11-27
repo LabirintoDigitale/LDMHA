@@ -6,10 +6,12 @@
         "description": "LDMHA aggiunge alla barra laterale (solo per gli amministratori) un pannello per mettere in ordine la musica: riconosce i brani dall'audio (AcoustID + MusicBrainz), corregge i tag, rinomina i file e toglie i doppioni.\n\nLa chiave AcoustID è gratuita: si crea su {acoustid_url} (senza chiave i brani si cercano solo per nome e tag).",
         "data": {
           "acoustid_key": "Chiave AcoustID (applicazione)",
-          "roots": "Cartelle della musica (separate da virgola)"
+          "roots": "Cartelle della musica (separate da virgola)",
+          "shazam": "Shazam se l'impronta non trova niente (servizio non ufficiale)"
         },
         "data_description": {
-          "roots": "Per esempio /media, /media/nas_musica. Le condivisioni di rete si montano in Impostazioni → Sistema → Archiviazione (uso \"Media\") e compaiono sotto /media."
+          "roots": "Per esempio /media, /media/nas_musica. Le condivisioni di rete si montano in Impostazioni → Sistema → Archiviazione (uso \"Media\") e compaiono sotto /media.",
+          "shazam": "Seconda possibilità con Shazam (libreria ShazamIO, installata da sola al primo uso). Shazam non dà una percentuale: le sue proposte valgono 85% e non vengono applicate da «Applica i sicuri»."
         }
       }
     },
@@ -28,10 +30,12 @@
         "description": "Chiave AcoustID (gratuita, da {acoustid_url}) e cartelle in cui LDMHA può leggere e rinominare i brani.",
         "data": {
           "acoustid_key": "Chiave AcoustID (applicazione)",
-          "roots": "Cartelle della musica (separate da virgola)"
+          "roots": "Cartelle della musica (separate da virgola)",
+          "shazam": "Shazam se l'impronta non trova niente (servizio non ufficiale)"
         },
         "data_description": {
-          "roots": "Per esempio /media, /media/nas_musica."
+          "roots": "Per esempio /media, /media/nas_musica.",
+          "shazam": "Seconda possibilità con Shazam (libreria ShazamIO, installata da sola al primo uso). Shazam non dà una percentuale: le sue proposte valgono 85% e non vengono applicate da «Applica i sicuri»."
         }
       }
     },

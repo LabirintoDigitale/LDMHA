@@ -16,7 +16,8 @@ Due strumenti per la musica di casa con **Home Assistant** e **Music Assistant**
 Un pannello nella barra laterale di Home Assistant, **visibile solo agli amministratori** (rinomina e sposta file).
 
 - **Riconosce i brani dall'audio**: impronta con [Chromaprint](https://acoustid.org/chromaprint) (`fpcalc`, scaricato da solo al primo uso) cercata su [AcoustID](https://acoustid.org), poi album, anno e numero di traccia da [MusicBrainz](https://musicbrainz.org). Funziona anche con file chiamati `traccia01.mp3` e senza tag.
-- **Se l'audio non basta** cerca su MusicBrainz per nome del file e tag, oppure a mano (*Cerca…*).
+- **Se l'impronta non trova niente** prova con **Shazam** (libreria [ShazamIO](https://github.com/shazamio/ShazamIO), servizio non ufficiale, si installa da sola al primo uso; si può disattivare nelle opzioni), poi cerca su MusicBrainz per nome del file e tag; oppure a mano (*Cerca…*). Le proposte di Shazam valgono 85%: controllale prima di applicare.
+- **Copertine**: nella scheda del brano vedi quella già nel file e quella proposta (dalla Cover Art Archive di MusicBrainz o da Shazam). Con *Applica* la copertina va nel file: solo se manca (predefinito), sempre, o mai. MP3, FLAC, M4A, OGG e Opus; annullando torna quella di prima.
 - **Tag e nome nuovo**: scegli fra le proposte, correggi i campi se serve e premi *Applica*: scrive i tag (titolo, artista, album, artista dell'album, anno, numero, ID MusicBrainz) e rinomina il file con lo schema che vuoi, per esempio `{artist} - {title}` oppure `{artist}/{album}/{track} - {title}` (con le sottocartelle).
 - **Tutti insieme**: *Riconosci tutti* passa la cartella (anche con le sottocartelle), *Applica i sicuri* sistema i brani riconosciuti dall'audio con sicurezza almeno del 90%.
 - **Doppioni**: lo stesso brano in più file viene segnalato; *Cestino* lo sposta in `.ldmha_cestino` dentro la cartella della musica (niente viene cancellato).
@@ -54,7 +55,7 @@ Music Assistant continua a usare il suo provider SMB: sono gli stessi file, vede
 ### Domande frequenti
 
 - **L'impronta prende un pezzo a caso?** No: `fpcalc` analizza i primi 120 secondi del brano, come le impronte nel database di AcoustID (allungare il tempo non serve). Se non trova il brano di solito è una versione diversa (dal vivo, remix, intro tagliata) o un brano che AcoustID non conosce: LDMHA passa da sola alla ricerca per nome.
-- **Servizi esterni**: AcoustID (con la tua chiave, al massimo 3 richieste al secondo) e MusicBrainz (senza chiave, 1 richiesta al secondo). Nessun altro dato esce da casa.
+- **Servizi esterni**: AcoustID (con la tua chiave, al massimo 3 richieste al secondo), MusicBrainz e la sua Cover Art Archive (senza chiave, 1 richiesta al secondo) e, solo se l'impronta non trova niente e l'opzione è attiva, Shazam (un pezzo dell'impronta del brano, una richiesta alla volta).
 
 ---
 

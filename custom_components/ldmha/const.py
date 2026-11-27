@@ -1,7 +1,7 @@
 """Costanti dell'integrazione LDMHA."""
 
 DOMAIN = "ldmha"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 PANEL_URL = "ldmha"
 PANEL_TITLE = "LDMHA"
@@ -14,6 +14,7 @@ DATA_WS_REGISTERED = f"{DOMAIN}_ws_registered"
 
 CONF_ACOUSTID_KEY = "acoustid_key"
 CONF_ROOTS = "roots"
+CONF_SHAZAM = "shazam"  # Shazam (non ufficiale) quando l'impronta di AcoustID non trova niente
 
 # cartelle in cui LDMHA può leggere e rinominare: /media (anche le condivisioni di rete montate da Home Assistant
 # come "Media") e /share (condivisioni montate come "Condivisione")

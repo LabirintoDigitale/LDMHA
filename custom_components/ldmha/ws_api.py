@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DATA_WS_REGISTERED, DOMAIN, VERSION
 from .fpcalc import FpcalcError
 from .ident import IdentError, guess_from_name
-from .library import TAG_KEYS, LibraryError, build_name, read_tags
+from .library import TAG_KEYS, LibraryError, build_name, read_cover, read_tags
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -116,7 +116,8 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         roots = await hass.async_add_executor_job(d.library.real_roots)
         stats = await hass.async_add_executor_job(d.library.db.stats) if d.library.db else {}
         return {"version": VERSION, "roots": roots, "configured": d.library.roots, "db": stats,
-                "acoustid": bool(d.identifier.key), "fpcalc": d.fpcalc.status()}
+                "acoustid": bool(d.identifier.key), "fpcalc": d.fpcalc.status(),
+                "shazam": d.identifier.shazam.status() if d.identifier.shazam else "disattivato"}
     await _run(connection, msg["id"], go())
 
 
@@ -244,6 +245,8 @@ def ws_preview(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
     vol.Required("path"): str,
     vol.Optional("tags", default={}): TAGS,
     vol.Optional("pattern", default=""): str,
+    vol.Optional("cover", default=""): str,  # indirizzo della copertina da mettere nel file (vuoto = non toccarla)
+    vol.Optional("cover_if_missing", default=True): bool,  # solo se il file non ne ha già una
 })
 @websocket_api.async_response
 async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
@@ -255,9 +258,57 @@ async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         if msg["pattern"].strip():
             cur = await hass.async_add_executor_job(read_tags, d.library.check(msg["path"]))
             name = build_name(msg["pattern"], {**cur, **tags}, os.path.splitext(msg["path"])[1])
-        res = await hass.async_add_executor_job(d.library.apply, msg["path"], tags, name)
+        url = msg["cover"]
+        if url and msg["cover_if_missing"]:
+            real = d.library.check(msg["path"])
+            if await hass.async_add_executor_job(read_cover, real):
+                url = ""  # il file ha già una copertina: non serve nemmeno scaricarla
+        cover = await _download_cover(hass, url) if url else None
+        res = await hass.async_add_executor_job(d.library.apply, msg["path"], tags, name, cover, msg["cover_if_missing"])
         await d.library.async_commit()
         return res
+    await _run(connection, msg["id"], go())
+
+
+async def _download_cover(hass: HomeAssistant, url: str) -> tuple[bytes, str]:
+    """Scarica la copertina scelta (versione grande se è della Cover Art Archive). Solo https, solo immagini."""
+    import aiohttp
+
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    if not url.startswith("https://"):
+        raise LibraryError("Indirizzo della copertina non valido")
+    url = url.replace("/front-250", "/front-500")
+    try:
+        async with async_get_clientsession(hass).get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+            if r.status != 200:
+                raise LibraryError(f"Copertina non scaricata (HTTP {r.status})")
+            mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+            if not mime.startswith("image/"):
+                raise LibraryError("L'indirizzo della copertina non è un'immagine")
+            data = await r.content.read(8 * 1024 * 1024 + 1)
+    except (aiohttp.ClientError, TimeoutError) as err:
+        raise LibraryError(f"Copertina non scaricata: {err}") from err
+    if len(data) > 8 * 1024 * 1024:
+        raise LibraryError("Copertina troppo grande")
+    return data, mime
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/cover", vol.Required("path"): str})
+@websocket_api.async_response
+async def ws_cover(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Copertina già dentro il file (per vederla nella scheda del brano), come immagine incorporata."""
+    async def go() -> dict[str, Any]:
+        import base64
+
+        real = _data(hass).library.check(msg["path"])
+        c = await hass.async_add_executor_job(read_cover, real)
+        if not c:
+            return {"cover": None}
+        if len(c[0]) > 3 * 1024 * 1024:
+            return {"cover": None, "size": len(c[0])}
+        return {"cover": f"data:{c[1]};base64,{base64.b64encode(c[0]).decode('ascii')}", "size": len(c[0])}
     await _run(connection, msg["id"], go())
 
 

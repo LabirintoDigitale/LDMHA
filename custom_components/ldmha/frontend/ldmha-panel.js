@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.5.0";
+const PANEL_VERSION = "0.6.0";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -43,6 +43,7 @@ class LdmhaPanel extends HTMLElement {
       done: 0, total: 0, open: null,
       // sul telefono l'albero parte chiuso (copre l'elenco); sullo schermo grande come lo si è lasciato
       tree: window.innerWidth > 900 && (st.tree ?? true),
+      cover: st.cover || "manca", // copertina nel file con Applica: "manca" (solo se non c'è), "sempre", "mai"
     };
     this.rows = new Map(); // percorso -> stato del brano
     this.view = []; // righe visibili (filtrate e ordinate)
@@ -77,7 +78,7 @@ class LdmhaPanel extends HTMLElement {
   // ================================================================ struttura
   renderShell() {
     this.shadowRoot.innerHTML = `<style>${CSS}</style>
-      <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><img class="logo" src="${ICON}" alt=""><h1>LDMHA</h1>
+      <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><img class="logo" src="${ICON}" alt=""><h1>LDMHA <small class="ver">${PANEL_VERSION}</small></h1>
         <nav><button data-tab="brani" class="on">Brani</button><button data-tab="registro">Registro</button><button data-tab="cronologia">Cronologia</button></nav></header>
       <div id="top"></div>
       <div id="main"><aside id="tree"></aside><section id="list"></section><section id="det" hidden></section></div>
@@ -128,6 +129,9 @@ class LdmhaPanel extends HTMLElement {
         <label class="pat" title="Schema del nome nuovo: {artist} {title} {album} {albumartist} {year} {track}; con / si creano sottocartelle; vuoto = solo i tag">Nome nuovo
           <input id="pattern" value="${esc(this.s.pattern)}" spellcheck="false" placeholder="(vuoto: solo i tag)"></label>
         <select id="preset" title="Schemi pronti"><option value="">Schemi…</option>${PATTERNS.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</select>
+        <select id="coverm" title="Copertina scritta nel file con Applica (dalla Cover Art Archive di MusicBrainz o da Shazam)">
+          ${[["manca", "Copertina: solo se manca"], ["sempre", "Copertina: sempre la nuova"], ["mai", "Copertina: non toccare"]]
+            .map(([v, t]) => `<option value="${v}" ${v === this.s.cover ? "selected" : ""}>${t}</option>`).join("")}</select>
       </div>
       <div class="bar acts">
         ${run ? `<button id="stop" class="pri">■ Ferma (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
@@ -149,6 +153,7 @@ class LdmhaPanel extends HTMLElement {
     $("q").oninput = (e) => { this.s.q = e.target.value; clearTimeout(this._qt); this._qt = setTimeout(() => this.refreshView(), 200); };
     $("filter").onchange = (e) => { this.s.filter = e.target.value; this.refreshView(); };
     $("pattern").onchange = (e) => this.setPattern(e.target.value);
+    $("coverm").onchange = (e) => { this.s.cover = e.target.value; save({ cover: this.s.cover }); this.renderDetail(); };
     $("preset").onchange = (e) => { if (e.target.value) { $("pattern").value = e.target.value; this.setPattern(e.target.value); } e.target.value = ""; };
     if (run) $("stop").onclick = () => { this.s.running = false; };
     else $("idall").onclick = () => this.identifyMany(this.view.filter((r) => r.status === "nuovo"));
@@ -498,13 +503,27 @@ class LdmhaPanel extends HTMLElement {
     let h = `<div class="dh"><b title="${esc(f.path)}">${esc(base(f.path))}</b><button class="ic" id="dx" title="Chiudi (Esc)">✕</button></div>
       <div class="mut small">${esc(f.path)} · ${size(f.size)}${t._length ? " · " + dur(+t._length) : ""}</div>
       <table class="kv">${FIELDS.map(([k, lab]) => `<tr><td>${lab}</td><td>${esc(t[k] || "")}</td></tr>`).join("")}</table>`;
+    // copertine: quella già nel file (letta a richiesta) e quella della proposta scelta
+    if (r.fileCover === undefined && !r._coverLoading) {
+      r._coverLoading = true;
+      this.ws({ type: "ldmha/cover", path: f.path }).then((res) => { r.fileCover = res.cover || null; })
+        .catch(() => { r.fileCover = null; }).finally(() => { r._coverLoading = false; if (this.s.open === r.file.path) this.renderDetail(); });
+    }
+    const pc = !closed && r.cand?.cover;
+    const fc = r.fileCover;
+    const will = !pc || this.s.cover === "mai" ? "La copertina del file non viene toccata (scelta «non toccare»)." : this.s.cover === "sempre" || !fc ? "Con Applica la copertina proposta va nel file." : "Il file ne ha già una: resta quella (scelta «solo se manca»).";
+    h += `<div class="lab">Copertina</div><div class="covers">
+      <figure><div class="cv">${fc ? `<img src="${fc}" alt="">` : r.fileCover === undefined ? `<span class="mut small">…</span>` : `<span class="mut small">nessuna</span>`}</div><figcaption>nel file</figcaption></figure>
+      ${closed ? "" : `<figure><div class="cv">${pc ? `<img src="${esc(pc)}" alt="" data-pc>` : `<span class="mut small">${r.cand ? "non trovata" : "—"}</span>`}</div><figcaption>proposta</figcaption></figure>`}
+      ${closed || !r.cand ? "" : `<div class="mut small cvnote">${pc ? will : "La proposta scelta non ha una copertina."}</div>`}</div>`;
     if (r.dup) h += `<div class="warn small">Stesso brano di «${esc(r.dup)}»: puoi spostarlo nel cestino.</div>`;
     if (r.note) h += `<div class="mut small">${esc(r.note)}</div>`;
     if (r.err) h += `<div class="warn small">${esc(r.err)}</div>`;
     if (r.cands?.length && !closed) {
       h += `<div class="lab">Proposte</div><div class="cands">${r.cands.map((c, i) => `<button data-cand="${i}" class="${c === r.cand ? "on" : ""}">
         <span class="sc ${c.source === "impronta" && c.score >= SAFE ? "ok" : ""}">${pct(c.score)}</span>
-        <span><b>${esc(c.artist)} — ${esc(c.title)}</b><br><small>${esc([c.album, c.year].filter(Boolean).join(", "))}${c.source === "impronta" ? " · audio" : " · nome"}${c.duration ? " · " + dur(c.duration) : ""}</small></span></button>`).join("")}</div>`;
+        ${c.cover ? `<img class="thumb" src="${esc(c.cover)}" alt="" loading="lazy">` : `<span class="thumb"></span>`}
+        <span><b>${esc(c.artist)} — ${esc(c.title)}</b><br><small>${esc([c.album, c.year].filter(Boolean).join(", "))}${{ impronta: " · audio", shazam: " · Shazam" }[c.source] || " · nome"}${c.duration ? " · " + dur(c.duration) : ""}</small></span></button>`).join("")}</div>`;
     }
     if (r.edit && !closed) {
       h += `<div class="lab">Tag nuovi</div><div class="ed">${FIELDS.map(([k, lab]) => `<label class="f-${k}">${lab}<input data-k="${k}" value="${esc(r.edit[k] || "")}"></label>`).join("")}</div>
@@ -522,6 +541,12 @@ class LdmhaPanel extends HTMLElement {
       <div class="mut small">↑ ↓ brano precedente / successivo · Invio applica e passa al successivo · Esc chiude</div>`;
     el.innerHTML = h;
     el.querySelector("#dx").onclick = () => this.openRow(null);
+    el.querySelectorAll("img.thumb").forEach((im) => im.addEventListener("error", () => { im.replaceWith(Object.assign(document.createElement("span"), { className: "thumb" })); }));
+    el.querySelector("img[data-pc]")?.addEventListener("error", (e) => {
+      if (r.cand) r.cand.cover = ""; // copertina non presente nella Cover Art Archive
+      e.target.parentElement.innerHTML = `<span class="mut small">non trovata</span>`;
+      const n = el.querySelector(".cvnote"); if (n) n.textContent = "La proposta scelta non ha una copertina.";
+    });
     el.querySelectorAll("[data-cand]").forEach((b) => { b.onclick = () => this.choose(r, r.cands[+b.dataset.cand]); });
     el.querySelectorAll(".ed input").forEach((inp) => inp.addEventListener("change", () => { r.edit[inp.dataset.k] = inp.value.trim(); this.preview([r]); }));
     el.querySelectorAll("[data-a]").forEach((b) => { b.onclick = () => this.action(r, b.dataset.a); });
@@ -666,11 +691,13 @@ class LdmhaPanel extends HTMLElement {
     r.status = "salvo"; r.err = "";
     this.touch(r);
     try {
-      const res = await this.ws({ type: "ldmha/apply", path: r.file.path, tags: r.edit, pattern: this.s.pattern });
+      const cover = this.s.cover !== "mai" && r.cand?.cover ? r.cand.cover : "";
+      const res = await this.ws({ type: "ldmha/apply", path: r.file.path, tags: r.edit, pattern: this.s.pattern,
+        cover, cover_if_missing: this.s.cover !== "sempre" });
       const old = r.file.path;
       this.move(r, res.path);
       r.file.tags = res.tags;
-      r.entry = res.entry; r.status = "fatto";
+      r.entry = res.entry; r.status = "fatto"; r.fileCover = undefined;
       this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}`, old, "ok");
     } catch (e) { r.status = "trovato"; r.err = e.message || String(e); this.log(`Applica non riuscito: ${r.err}`, r.file.path, "ko"); }
     this.touch(r);
@@ -712,7 +739,7 @@ class LdmhaPanel extends HTMLElement {
       const res = await this.ws({ type: "ldmha/undo", id: r.entry.id });
       if (r.entry.kind === "apply") r.file.tags = { ...(r.entry.old_tags || {}), _length: r.file.tags?._length };
       this.move(r, res.path);
-      r.entry = null; r.status = r.cands?.length ? "trovato" : "nuovo"; r.err = "";
+      r.entry = null; r.status = r.cands?.length ? "trovato" : "nuovo"; r.err = ""; r.fileCover = undefined;
       this.log("Modifica annullata", res.path, "ok");
       this.markDups();
       this.preview([r]);
@@ -786,6 +813,7 @@ const CSS = `
 [hidden] { display: none !important; }
 header { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 12px; flex: none; background: var(--app-header-background-color, var(--primary-color)); color: var(--app-header-text-color, #fff); }
 header .logo { width: 36px; height: 36px; border-radius: 8px; flex: none; }
+header .ver { font-size: 12px; opacity: .8; }
 header h1 { font-size: 20px; font-weight: 400; margin: 0; flex: 1; }
 header button { background: none; border: none; color: inherit; font-size: 14px; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 header .menu { font-size: 22px; } header nav button.on { background: rgba(255,255,255,.2); }
@@ -843,6 +871,13 @@ progress { width: 120px; }
 .kv { width: 100%; border-collapse: collapse; margin: 8px 0; } .kv td { padding: 2px 4px; border-bottom: 1px solid var(--divider-color); vertical-align: top; }
 .kv td:first-child { color: var(--secondary-text-color); width: 90px; }
 .lab { font-weight: 600; margin: 10px 0 4px; }
+.covers { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.covers figure { margin: 0; text-align: center; }
+.covers figcaption { font-size: 11px; color: var(--secondary-text-color); }
+.cv { width: 120px; height: 120px; border-radius: 8px; background: var(--secondary-background-color); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.cv img { width: 100%; height: 100%; object-fit: cover; }
+.cvnote { flex: 1; min-width: 100px; align-self: center; }
+.cands .thumb { width: 36px; height: 36px; border-radius: 4px; flex: none; object-fit: cover; background: var(--secondary-background-color); }
 .cands { display: flex; flex-direction: column; gap: 3px; max-height: 260px; overflow: auto; }
 .cands button { display: flex; gap: 8px; align-items: center; text-align: left; white-space: normal; padding: 4px 6px; }
 .cands button.on { border-color: var(--primary-color); background: rgba(3,169,244,.12); }
