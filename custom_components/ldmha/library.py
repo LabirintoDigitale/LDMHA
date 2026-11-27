@@ -282,7 +282,12 @@ class Library:
                            key=str.lower)
         except OSError as err:
             raise LibraryError(f"Cartella non leggibile: {err}") from err
-        return {"path": real, "dirs": names}
+        # brani letti e sistemati per sottocartella (dall'archivio): l'albero mostra dove c'è ancora da fare
+        stats = {}
+        if self.db:
+            st = self.db.dir_stats([os.path.join(real, n) for n in names])
+            stats = {n: {"total": st[os.path.join(real, n)][0], "done": st[os.path.join(real, n)][1]} for n in names}
+        return {"path": real, "dirs": names, "stats": stats}
 
     def scan(self, path: str, recursive: bool, send, stop, refresh: bool = False) -> None:
         """Lettura a blocchi (nel filo dell'executor). Se la cartella è già nell'archivio e non si chiede di

@@ -169,6 +169,17 @@ class Db:
             self._c.execute("DELETE FROM scans")
             self._c.commit()
 
+    def dir_stats(self, paths: list[str]) -> dict[str, tuple[int, int]]:
+        """Per ogni cartella (con le sottocartelle): (brani nell'archivio, brani sistemati)."""
+        out: dict[str, tuple[int, int]] = {}
+        with self._lock:
+            for p in paths:
+                a, b = _under(p)
+                n, done = self._c.execute("SELECT COUNT(*), COALESCE(SUM(applied), 0) FROM files WHERE path >= ? AND path < ?",
+                                          (a, b)).fetchone()
+                out[p] = (n or 0, done or 0)
+        return out
+
     def stats(self) -> dict[str, Any]:
         with self._lock:
             n = self._c.execute("SELECT COUNT(*), SUM(ident IS NOT NULL), SUM(applied) FROM files").fetchone()

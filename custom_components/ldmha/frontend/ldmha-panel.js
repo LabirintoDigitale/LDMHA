@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.4";
+const PANEL_VERSION = "0.7.5";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -43,7 +43,8 @@ class LdmhaPanel extends HTMLElement {
       done: 0, total: 0, open: null,
       // sul telefono l'albero parte chiuso (copre l'elenco); sullo schermo grande come lo si è lasciato
       tree: window.innerWidth > 900 && (st.tree ?? true),
-      cover: st.cover || "manca", // copertina nel file con Applica: "manca" (solo se non c'è), "sempre", "mai"
+      cover: st.cover || "manca",
+      showDone: !!st.showDone, // albero: anche le cartelle con tutti i brani già sistemati // copertina nel file con Applica: "manca" (solo se non c'è), "sempre", "mai"
     };
     this.rows = new Map(); // percorso -> stato del brano
     this.view = []; // righe visibili (filtrate e ordinate)
@@ -205,7 +206,11 @@ class LdmhaPanel extends HTMLElement {
     const n = this.nodes.get(path) || { dirs: null, open: false };
     this.nodes.set(path, n);
     if (n.dirs) return n;
-    try { n.dirs = (await this.ws({ type: "ldmha/dirs", path })).dirs; } catch (e) { n.dirs = []; n.err = e.message || String(e); }
+    try {
+      const res = await this.ws({ type: "ldmha/dirs", path });
+      n.dirs = res.dirs;
+      n.stats = res.stats || {};
+    } catch (e) { n.dirs = []; n.err = e.message || String(e); }
     for (const d of n.dirs) if (!this.nodes.has(path + "/" + d)) this.nodes.set(path + "/" + d, { dirs: null, open: false });
     return n;
   }
@@ -231,11 +236,21 @@ class LdmhaPanel extends HTMLElement {
       let h = `<div class="tn ${on ? "on" : ""}" style="padding-left:${4 + depth * 14}px">
         <button class="tw" data-tw="${esc(path)}" ${leaf ? "disabled" : ""}>${leaf ? "" : n.open ? "▾" : "▸"}</button>
         <input type="checkbox" class="tc" data-tc="${esc(path)}" ${on ? "checked" : ""} title="Aggiungi o togli questa cartella dall'elenco (più cartelle insieme)">
-        <button class="tl" data-go="${esc(path)}" title="${esc(path)}">${esc(name)}</button></div>`;
-      if (n.open && n.dirs) for (const d of n.dirs) h += item(path + "/" + d, d, depth + 1);
+        <button class="tl" data-go="${esc(path)}" title="${esc(path)}">${esc(name)}</button>${this.treeBadge(path)}</div>`;
+      if (n.open && n.dirs) {
+        for (const d of n.dirs) {
+          const cp = path + "/" + d;
+          if (!this.s.showDone && this.isDone(path, d) && !this.s.paths.includes(cp)) { hidden++; continue; }
+          h += item(cp, d, depth + 1);
+        }
+      }
       return h;
     };
-    el.innerHTML = roots.map((r) => item(r, r, 0)).join("") || `<div class="note">Nessuna cartella</div>`;
+    let hidden = 0;
+    const tree = roots.map((r) => item(r, r, 0)).join("");
+    el.innerHTML = `<label class="tdone"><input type="checkbox" id="showdone" ${this.s.showDone ? "checked" : ""}> Mostra anche le cartelle finite${hidden ? ` (${hidden} nascoste)` : ""}</label>`
+      + (tree || `<div class="note">Nessuna cartella</div>`);
+    el.querySelector("#showdone").onchange = (e) => { this.s.showDone = e.target.checked; save({ showDone: this.s.showDone }); this.renderTree(); };
     el.querySelectorAll("[data-tw]").forEach((b) => {
       b.onclick = async () => {
         const n = await this.loadNode(b.dataset.tw);
@@ -255,6 +270,34 @@ class LdmhaPanel extends HTMLElement {
       };
     });
     el.querySelector(".tn.on")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // cartella finita: tutti i brani letti sono sistemati (si nasconde dall'albero, come i brani dall'elenco)
+  isDone(parent, name) {
+    const st = this.nodes.get(parent)?.stats?.[name];
+    return !!(st && st.total && st.done >= st.total);
+  }
+
+  // sistemati / letti nella cartella (dall'archivio): ✓ se tutti sistemati, altrimenti «12/40»
+  treeBadge(path) {
+    const i = path.lastIndexOf("/");
+    const st = this.nodes.get(path.slice(0, i))?.stats?.[path.slice(i + 1)];
+    if (!st || !st.total) return "";
+    if (st.done >= st.total) return `<span class="tb ok" title="Tutti i ${st.total} brani sono sistemati">✓</span>`;
+    return `<span class="tb" title="${st.done} brani sistemati su ${st.total} letti">${st.done}/${st.total}</span>`;
+  }
+
+  // dopo Applica o Cestino: conteggi e sottocartelle dell'albero da rileggere (cartelle sparite, conteggi nuovi)
+  async refreshTree() {
+    const open = [...this.nodes.entries()].filter(([, n]) => n.dirs);
+    for (const [p, n] of open) {
+      try {
+        const res = await this.ws({ type: "ldmha/dirs", path: p });
+        n.dirs = res.dirs; n.stats = res.stats || {};
+        for (const d of n.dirs) if (!this.nodes.has(p + "/" + d)) this.nodes.set(p + "/" + d, { dirs: null, open: false });
+      } catch (e) { /* cartella sparita: resta com'era */ }
+    }
+    this.renderTree();
   }
 
   // ================================================================ elenco dei brani
@@ -537,7 +580,7 @@ class LdmhaPanel extends HTMLElement {
   settled(r) {
     this.sel.delete(r.file.path);
     clearTimeout(this._settleT);
-    this._settleT = setTimeout(() => { this.refreshView(); this.renderTop(); }, 700);
+    this._settleT = setTimeout(() => { this.refreshView(); this.renderTop(); if (!this.s.running) this.refreshTree(); }, 700);
   }
 
   // una riga è cambiata: si ridisegna lei (e la scheda se è quella aperta)
@@ -800,6 +843,7 @@ class LdmhaPanel extends HTMLElement {
     this.s.running = false; this.s.runLabel = "";
     this.renderTop();
     this.refreshView();
+    this.refreshTree();
   }
 
   async applyMany(list) {
@@ -965,6 +1009,9 @@ progress { width: 120px; }
 #dplay { position: sticky; top: -10px; z-index: 2; background: var(--card-background-color); padding: 4px 0 6px; margin-top: -4px; }
 #dplay audio { width: 100%; height: 36px; }
 .tc { margin: 0 4px 0 0; flex: none; }
+.tdone { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--secondary-text-color); padding: 2px 8px 6px; }
+.tb { flex: none; font-size: 10px; color: var(--secondary-text-color); padding: 0 6px 0 2px; }
+.tb.ok { color: #2e7d32; font-size: 12px; font-weight: 700; }
 .st { display: inline-block; width: 16px; text-align: center; font-weight: 700; color: var(--secondary-text-color); }
 .st.ok { color: #2e7d32; } .st.mid { color: #ef6c00; } .st.ko { color: var(--error-color, #c62828); } .st.run { color: #1976d2; } .st.done { color: #2e7d32; }
 .prop { color: #2e7d32; }
