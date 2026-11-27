@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.1";
+const PANEL_VERSION = "0.7.2";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -518,7 +518,8 @@ class LdmhaPanel extends HTMLElement {
       if (r) { this.openRow(r); this.scrollTo(r); }
     } else if (e.key === "Enter" && this.view[i]?.edit) {
       e.preventDefault();
-      this.apply(this.view[i]).then(() => { const n = this.view[i + 1]; if (n) { this.openRow(n); this.scrollTo(n); } });
+      const n = this.view[i + 1]; // il successivo si sceglie prima: dopo Applica il brano esce dall'elenco
+      this.apply(this.view[i]).then(() => { if (n) { this.openRow(n); this.scrollTo(n); } });
     } else if (e.key === "Escape") this.openRow(null);
   }
 
@@ -529,6 +530,14 @@ class LdmhaPanel extends HTMLElement {
     const y = (i + 1) * ROW; // +1: l'intestazione delle colonne
     if (y - ROW < vp.scrollTop + ROW) vp.scrollTop = y - 2 * ROW;
     else if (y + ROW > vp.scrollTop + vp.clientHeight) vp.scrollTop = y + ROW - vp.clientHeight;
+  }
+
+  // brano sistemato o nel cestino: esce dalla selezione e, se il filtro lo nasconde, dall'elenco (dopo un attimo,
+  // così si vede il segno di fatto)
+  settled(r) {
+    this.sel.delete(r.file.path);
+    clearTimeout(this._settleT);
+    this._settleT = setTimeout(() => { this.refreshView(); this.renderTop(); }, 700);
   }
 
   // una riga è cambiata: si ridisegna lei (e la scheda se è quella aperta)
@@ -770,6 +779,7 @@ class LdmhaPanel extends HTMLElement {
       this.move(r, res.path);
       r.file.tags = res.tags;
       r.entry = res.entry; r.status = "fatto"; r.fileCover = undefined;
+      this.settled(r);
       this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}`, old, "ok");
     } catch (e) { r.status = "trovato"; r.err = e.message || String(e); this.log(`Applica non riuscito: ${r.err}`, r.file.path, "ko"); }
     this.touch(r);
@@ -796,6 +806,7 @@ class LdmhaPanel extends HTMLElement {
       try {
         const res = await this.ws({ type: "ldmha/trash", path: r.file.path });
         r.entry = res.entry; r.status = "cestino"; r.err = "";
+        this.settled(r);
         this.log("Spostato nel cestino", r.file.path, "ok");
         this.sel.delete(r.file.path);
       } catch (e) { r.err = e.message || String(e); this.log(`Cestino non riuscito: ${r.err}`, r.file.path, "ko"); }
