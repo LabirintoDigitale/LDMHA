@@ -46,8 +46,13 @@ async def _run(connection, msg_id: int, coro) -> None:
         connection.send_error(msg_id, "ldmha_error", str(err))
     except Exception as err:  # noqa: BLE001 - errore imprevisto: nome e messaggio al pannello, dettagli nel registro
         _LOGGER.exception("Errore imprevisto in LDMHA")
+        import os
+        import traceback
+
+        # dove è successo (file e riga), così dal pannello si capisce subito cosa correggere
+        where = " ← ".join(f"{os.path.basename(f.filename)}:{f.lineno}" for f in traceback.extract_tb(err.__traceback__)[-3:][::-1])
         connection.send_error(msg_id, "ldmha_error",
-                              f"Errore imprevisto ({type(err).__name__}: {err}). Dettagli nel registro di Home Assistant (cerca «ldmha»)")
+                              f"Errore imprevisto ({type(err).__name__}: {err}) in {where}. Dettagli nel registro di Home Assistant (cerca «ldmha»)")
 
 
 # ---------------------------------------------------------------- lettori MusikHa (app sul telefono)
