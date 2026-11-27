@@ -9,6 +9,8 @@ Integrazione per Home Assistant che **mette in ordine la musica**: un pannello n
 - **Doppioni**: lo stesso brano in più file viene segnalato; *Cestino* lo sposta in `.ldmha_cestino` dentro la cartella della musica.
 - **Si può sempre tornare indietro**: ogni modifica (tag, nome, cestino) resta nella *Cronologia* e si annulla con un tocco.
 
+Il pannello regge anche librerie grandi: albero delle cartelle a sinistra, tabella compatta (ordinabile, con ricerca e filtri: da riconoscere, sicuri, incerti, doppioni…), selezione multipla (con Maiusc per un intervallo) e scheda del brano a destra. Con la scheda aperta: ↑ ↓ per passare al brano vicino, Invio per applicare e andare al successivo.
+
 Dopo le modifiche, Music Assistant vede i nomi e i tag nuovi alla prossima sincronizzazione della libreria.
 
 ## Installazione
@@ -20,7 +22,7 @@ Dopo le modifiche, Music Assistant vede i nomi e i tag nuovi alla prossima sincr
 
 ### Musica sul NAS
 
-Monta la condivisione in *Impostazioni → Sistema → Archiviazione → Aggiungi archiviazione di rete* con uso **Media**: compare sotto `/media/<nome>` e LDMHA la vede (aggiungila alle cartelle se non hai messo `/media`). La condivisione deve essere montata in lettura **e scrittura** per poter rinominare.
+Il provider SMB di Music Assistant collega il NAS solo dentro Music Assistant: Home Assistant (e quindi LDMHA) non lo vede. Monta la condivisione in *Impostazioni → Sistema → Archiviazione → Aggiungi archiviazione di rete* con uso **Media**: compare sotto `/media/<nome>` e LDMHA la vede (aggiungila alle cartelle se non hai messo `/media`). La condivisione deve essere montata in lettura **e scrittura** per poter rinominare.
 
 ## MusikHa
 

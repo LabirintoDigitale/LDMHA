@@ -22,7 +22,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_info, ws_list, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_info, ws_dirs, ws_list, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -50,6 +50,15 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
         roots = await hass.async_add_executor_job(d.library.real_roots)
         return {"version": VERSION, "roots": roots, "configured": d.library.roots,
                 "acoustid": bool(d.identifier.key), "fpcalc": d.fpcalc.status()}
+    await _run(connection, msg["id"], go())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/dirs", vol.Required("path"): str})
+@websocket_api.async_response
+async def ws_dirs(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    async def go() -> dict[str, Any]:
+        return await hass.async_add_executor_job(_data(hass).library.list_dirs, msg["path"])
     await _run(connection, msg["id"], go())
 
 

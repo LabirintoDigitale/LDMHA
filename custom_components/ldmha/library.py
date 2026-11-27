@@ -162,6 +162,16 @@ class Library:
         raise LibraryError("Percorso fuori dalle cartelle della musica")
 
     # -- elenco
+    def list_dirs(self, path: str) -> dict[str, Any]:
+        """Solo le sottocartelle (per l'albero del pannello): veloce anche sul NAS, senza leggere i brani."""
+        real = self.check(path)
+        try:
+            names = sorted((e.name for e in os.scandir(real) if not e.name.startswith(".") and e.is_dir(follow_symlinks=False)),
+                           key=str.lower)
+        except OSError as err:
+            raise LibraryError(f"Cartella non leggibile: {err}") from err
+        return {"path": real, "dirs": names}
+
     def list_dir(self, path: str, recursive: bool) -> dict[str, Any]:
         real = self.check(path)
         if not os.path.isdir(real):
