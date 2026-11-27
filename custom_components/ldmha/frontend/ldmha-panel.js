@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.9";
+const PANEL_VERSION = "0.8.0";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -82,6 +82,8 @@ class LdmhaPanel extends HTMLElement {
       for (const p of this.s.paths) await this.expandTo(p);
       this.openPaths(this.s.paths);
     } else this.renderAll();
+    // riconoscimento in corso dentro Home Assistant (anche avviato prima di aprire il pannello): ci si aggancia
+    this._hass.connection.subscribeMessage((ev) => this.onJob(ev), { type: "ldmha/job_subscribe" }).catch(() => {});
   }
 
   // ================================================================ struttura
@@ -167,7 +169,10 @@ class LdmhaPanel extends HTMLElement {
     $("pattern").onchange = (e) => this.setPattern(e.target.value);
     $("coverm").onchange = (e) => { this.s.cover = e.target.value; save({ cover: this.s.cover }); this.renderDetail(); };
     $("preset").onchange = (e) => { if (e.target.value) { $("pattern").value = e.target.value; this.setPattern(e.target.value); } e.target.value = ""; };
-    if (run) $("stop").onclick = () => { this.s.running = false; };
+    if (run) $("stop").onclick = () => {
+      if (this.s.job) this.ws({ type: "ldmha/job_stop" }).catch(() => {}); // riconoscimento dentro Home Assistant
+      else this.s.running = false;
+    };
     else $("idall").onclick = () => this.identifyMany(this.view.filter((r) => r.status === "nuovo"));
     $("safe").onclick = () => this.applySafe();
     $("sid").onclick = () => this.identifyMany(this.selected().filter((r) => r.status !== "fatto" && r.status !== "cestino"));
@@ -315,7 +320,7 @@ class LdmhaPanel extends HTMLElement {
 
   // più cartelle: si leggono una dopo l'altra e i brani finiscono nello stesso elenco
   async openPaths(paths, refresh = false) {
-    this.s.running = false;
+    if (!this.s.job) this.s.running = false; // il riconoscimento dentro Home Assistant continua comunque
     this.stopScan();
     this.s.paths = [...paths];
     this.s.path = paths[0];
@@ -744,24 +749,50 @@ class LdmhaPanel extends HTMLElement {
     this.touch(r);
   }
 
+  // «Riconosci tutti» / Riconosci sui selezionati: il lavoro gira dentro Home Assistant, non nel browser, così
+  // continua anche cambiando scheda o chiudendo il pannello; qui arrivano avanzamento e risultati (onJob)
   async identifyMany(list) {
+    list = list.filter((r) => r.status !== "cestino");
     if (!list.length || this.s.running) return;
-    this.s.running = true; this.s.runLabel = "riconosco"; this.s.done = 0; this.s.total = list.length;
-    this.renderTop();
-    let k = 0;
-    const work = async () => {
-      while (this.s.running && k < list.length) {
-        const r = list[k++];
-        if (r.status !== "cestino") await this.identify(r);
-        this.s.done++;
-        const pb = this.shadowRoot.querySelector("#top progress");
-        if (pb) { pb.value = this.s.done; this.shadowRoot.getElementById("stop").textContent = `■ Ferma riconosco (${this.s.done}/${this.s.total})`; }
+    try {
+      await this.ws({ type: "ldmha/job_start", paths: list.map((r) => r.file.path) });
+      this.log(`Riconoscimento avviato dentro Home Assistant: ${list.length} brani (continua anche a pannello chiuso)`);
+    } catch (e) { alert(e.message || e); }
+  }
+
+  onJob(ev) {
+    if (ev.type === "state") {
+      const was = this.s.job;
+      this.s.job = !!ev.running;
+      this.s.running = !!ev.running || (this.s.running && !was && this.s.runLabel !== "riconosco");
+      if (ev.running) { this.s.runLabel = "riconosco"; this.s.done = ev.done; this.s.total = ev.total; }
+      if (was && !ev.running) {
+        this.log(`Riconoscimento ${ev.stopped ? "fermato" : "finito"}: ${ev.done} brani su ${ev.total}`);
+        this.refreshView();
       }
-    };
-    await Promise.all(Array.from({ length: WORKERS }, work));
-    this.s.running = false;
-    this.renderTop();
-    if (!["tutti", "aperti"].includes(this.s.filter)) this.refreshView();
+      this.renderTop();
+      return;
+    }
+    if (ev.type !== "result") return;
+    this.s.done = ev.done; this.s.total = ev.total;
+    const pb = this.shadowRoot.querySelector("#top progress");
+    const sb = this.shadowRoot.getElementById("stop");
+    if (pb) pb.value = ev.done;
+    if (sb) sb.textContent = `■ Ferma riconosco (${ev.done}/${ev.total})`;
+    const r = this.rows.get(ev.path);
+    if (!r) return; // brano non nell'elenco aperto: il risultato è comunque nell'archivio
+    if (ev.error) {
+      r.status = "errore"; r.err = ev.error;
+      this.log(`Errore: ${ev.error}`, r.file.path, "ko");
+    } else {
+      const res = ev.res || {};
+      r.cands = res.candidates || []; r.note = res.note || ""; r.log = res.log || []; r.err = "";
+      if (res.key_error && this.s.info && this.s.info.acoustid_error !== res.key_error) { this.s.info.acoustid_error = res.key_error; this.renderTop(); }
+      r.status = r.cands.length ? "trovato" : "nontrovato";
+      if (r.cands.length) this.choose(r, r.cands[0]); else r.edit = null;
+      this.log(r.cands.length ? `Riconosciuto: ${r.cands[0].artist} — ${r.cands[0].title} (${pct(r.cands[0].score)})` : "Nessuna proposta", r.file.path, r.cands.length ? "ok" : "ko");
+    }
+    this.touch(r);
   }
 
   async search(r, text) {

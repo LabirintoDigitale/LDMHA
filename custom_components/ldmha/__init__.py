@@ -4,6 +4,7 @@ dall'audio (AcoustID + MusicBrainz), corregge i tag, rinomina i file e toglie i 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from pathlib import Path
 
 from homeassistant.components import frontend, panel_custom
@@ -45,6 +46,7 @@ class LdmhaData:
     fpcalc: Fpcalc
     identifier: Identifier
     players: Players
+    jobs: Any = None  # Jobs: riconoscimento di tanti brani dentro Home Assistant
 
 
 type LdmhaConfigEntry = ConfigEntry[LdmhaData]
@@ -61,6 +63,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     await players.async_load()
     entry.runtime_data = LdmhaData(library, fp, Identifier(
         hass, fp, clean_key(opts.get(CONF_ACOUSTID_KEY, "")), ShazamRecognizer(hass) if opts.get(CONF_SHAZAM, True) else None), players)
+    from .jobs import Jobs
+
+    entry.runtime_data.jobs = Jobs(hass, entry.runtime_data)
     hass.data[DOMAIN] = entry
 
     # "servizio" nella scheda dell'integrazione: mostra la versione installata
@@ -105,6 +110,8 @@ async def _async_reload(hass: HomeAssistant, entry: LdmhaConfigEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> bool:
+    if entry.runtime_data.jobs:
+        entry.runtime_data.jobs.stop()
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     frontend.async_remove_panel(hass, PANEL_URL)
     hass.data.pop(DOMAIN, None)

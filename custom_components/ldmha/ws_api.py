@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_job_start, ws_job_stop, ws_job_subscribe, ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -116,6 +116,53 @@ def ws_player_state(hass: HomeAssistant, connection: websocket_api.ActiveConnect
 
 
 # ---------------------------------------------------------------- pannello (solo amministratori)
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_start", vol.Required("paths"): [str]})
+@callback
+def ws_job_start(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Riconosce questi brani dentro Home Assistant (continua anche a pannello chiuso)."""
+    try:
+        ok = _data(hass).jobs.start(msg["paths"])
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    if not ok:
+        connection.send_error(msg["id"], "ldmha_error", "C'è già un riconoscimento in corso")
+        return
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_stop"})
+@callback
+def ws_job_stop(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    try:
+        _data(hass).jobs.stop()
+    except LibraryError:
+        pass
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_subscribe"})
+@callback
+def ws_job_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Avanzamento e risultati del riconoscimento in corso (anche se avviato da un altro pannello)."""
+    try:
+        jobs = _data(hass).jobs
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    mid = msg["id"]
+
+    @callback
+    def send(ev: dict) -> None:
+        connection.send_message(websocket_api.event_message(mid, ev))
+
+    connection.send_result(mid)
+    connection.subscriptions[mid] = jobs.subscribe(send)
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): "ldmha/info"})
 @websocket_api.async_response
