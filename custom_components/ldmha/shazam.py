@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
+import tempfile
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -13,6 +16,7 @@ from homeassistant.core import HomeAssistant
 _LOGGER = logging.getLogger(__name__)
 
 REQUIREMENT = "shazamio==0.9.0"
+SEGMENT = 15  # secondi di ogni pezzo in più provato (Shazam ne ascolta circa 12)
 
 
 class ShazamError(Exception):
@@ -48,8 +52,59 @@ class ShazamRecognizer:
                 _LOGGER.warning("Shazam non disponibile: %s", err)
                 raise ShazamError(self._err) from err
 
-    async def recognize(self, path: str) -> dict[str, Any] | None:
-        """Brano riconosciuto da Shazam (titolo, artista, album, anno, ISRC, copertina) o None."""
+    async def recognize(self, path: str, duration: int = 0, log: list[str] | None = None) -> dict[str, Any] | None:
+        """Brano riconosciuto da Shazam (titolo, artista, album, anno, ISRC, copertina) o None. Prima il pezzo che
+        sceglie Shazam; se non lo riconosce si provano altri pezzi del brano (a 30 secondi, a metà, a tre quarti),
+        ritagliati con ffmpeg, fino al primo riconosciuto."""
+        log = log if log is not None else []
+        hit = await self._recognize_once(path)
+        if hit:
+            log.append("Shazam: riconosciuto al primo tentativo")
+            return hit
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            log.append("Shazam: primo pezzo non riconosciuto; ffmpeg non c'è, niente altri pezzi")
+            return None
+        offsets = self._offsets(duration)
+        log.append(f"Shazam: primo pezzo non riconosciuto, provo altri {len(offsets)} pezzi")
+        with tempfile.TemporaryDirectory(prefix="ldmha_shazam_") as tmp:
+            for n, off in enumerate(offsets, 1):
+                part = os.path.join(tmp, f"pezzo{n}.wav")
+                if not await self._cut(ffmpeg, path, off, part):
+                    log.append(f"Shazam: pezzo a {off // 60}:{off % 60:02d} non ritagliato")
+                    continue
+                hit = await self._recognize_once(part)
+                if hit:
+                    log.append(f"Shazam: riconosciuto con il pezzo a {off // 60}:{off % 60:02d}")
+                    return hit
+                log.append(f"Shazam: pezzo a {off // 60}:{off % 60:02d} non riconosciuto")
+        return None
+
+    @staticmethod
+    def _offsets(duration: int) -> list[int]:
+        """Punti da cui ritagliare: a 30 secondi, a metà e a tre quarti (senza uscire dal brano, senza doppioni)."""
+        if duration and duration < SEGMENT + 5:
+            return []
+        pts = [30, duration // 2, duration * 3 // 4] if duration else [30, 60, 90]
+        out: list[int] = []
+        for p in pts:
+            p = max(0, min(p, duration - SEGMENT) if duration else p)
+            if all(abs(p - q) >= SEGMENT for q in out):
+                out.append(p)
+        return out
+
+    @staticmethod
+    async def _cut(ffmpeg: str, path: str, off: int, out: str) -> bool:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                ffmpeg, "-loglevel", "error", "-y", "-ss", str(off), "-t", str(SEGMENT), "-i", path,
+                "-ac", "1", "-ar", "16000", out, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(proc.wait(), 60)
+        except (OSError, TimeoutError):
+            return False
+        return proc.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1000
+
+    async def _recognize_once(self, path: str) -> dict[str, Any] | None:
         await self._ensure()
         try:
             from shazamio import Shazam

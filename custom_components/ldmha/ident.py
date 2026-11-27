@@ -283,11 +283,11 @@ class Identifier:
                 c["score"] = round(c["score"] * 0.7, 3)
         return out
 
-    async def by_shazam(self, path: str, log: list[str]) -> list[dict[str, Any]]:
+    async def by_shazam(self, path: str, log: list[str], duration: int = 0) -> list[dict[str, Any]]:
         """Seconda possibilità con Shazam; i dettagli (album, anno, numero) da MusicBrainz tramite il codice ISRC."""
         t0 = time.monotonic()
         try:
-            hit = await self.shazam.recognize(path)
+            hit = await self.shazam.recognize(path, duration, log)
         except ShazamError as err:
             log.append(f"Shazam: {err}")
             return []
@@ -382,7 +382,7 @@ class Identifier:
                           if got else "nessun dettaglio in più"))
         elif self.shazam is not None:
             log.append("Provo con Shazam")
-            cands = await self.by_shazam(path, log)
+            cands = await self.by_shazam(path, log, duration)
             if cands:
                 note = (note + " — " if note else "") + "riconosciuto da Shazam (controlla prima di applicare)"
         else:
