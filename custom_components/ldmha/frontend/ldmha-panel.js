@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.7";
+const PANEL_VERSION = "0.7.8";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -154,6 +154,7 @@ class LdmhaPanel extends HTMLElement {
         <button id="sap" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Applica</button>
         <button id="str" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Cestino</button>
         <button id="snone" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Deseleziona</button>
+        <button id="fixcov" ${run || !this.rows.size ? "disabled" : ""} title="Cerca nelle cartelle aperte (anche nei brani già sistemati) le copertine rovinate, cioè tagliate a metà, e le riscarica intere">Ripara copertine</button>
         <span id="count" class="hint grow"></span>
       </div>`;
     const $ = (id) => top.querySelector("#" + id);
@@ -172,6 +173,7 @@ class LdmhaPanel extends HTMLElement {
     $("sid").onclick = () => this.identifyMany(this.selected().filter((r) => r.status !== "fatto" && r.status !== "cestino"));
     $("sap").onclick = () => this.applyMany(this.selected().filter((r) => r.edit && r.status !== "fatto" && r.status !== "cestino"));
     $("str").onclick = () => this.trashMany(this.selected().filter((r) => r.status !== "cestino"));
+    $("fixcov").onclick = () => this.fixCovers();
     $("snone").onclick = () => { this.sel.clear(); this.renderTop(); this.paint(); };
     this.updateCount();
   }
@@ -849,6 +851,25 @@ class LdmhaPanel extends HTMLElement {
     this.renderTop();
     this.refreshView();
     this.refreshTree();
+  }
+
+  // copertine rovinate (tagliate a metà da LDMHA prima della 0.7.8): si riscaricano intere dalla proposta salvata
+  async fixCovers() {
+    const list = [...this.rows.values()].filter((r) => r.status !== "cestino");
+    if (!list.length) return;
+    if (!confirm(`Controllare le copertine di ${list.length} brani (anche quelli già sistemati) e riscaricare quelle rovinate?`)) return;
+    const n = { riparata: 0, sana: 0, nessuna: 0, "senza proposta": 0, errore: 0 };
+    await this.runMany("riparo copertine", list, async (r) => {
+      try {
+        const res = await this.ws({ type: "ldmha/fix_cover", path: r.file.path }, 120000);
+        n[res.result] = (n[res.result] || 0) + 1;
+        if (res.result === "riparata") { this.log("Copertina riparata", r.file.path, "ok"); r.fileCover = undefined; this.touch(r); }
+        else if (res.result === "senza proposta") this.log("Copertina rovinata ma senza una proposta da cui riscaricarla: fai Riconosci e Applica con «Copertina: sempre la nuova»", r.file.path, "ko");
+      } catch (e) { n.errore++; this.log(`Copertina non riparata: ${e.message || e}`, r.file.path, "ko"); }
+    });
+    const msg = `Copertine: ${n.riparata} riparate, ${n.sana} già buone, ${n.nessuna} brani senza copertina, ${n["senza proposta"]} rovinate senza proposta, ${n.errore} errori`;
+    this.log(msg);
+    alert(msg);
   }
 
   async applyMany(list) {

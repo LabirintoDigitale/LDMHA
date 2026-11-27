@@ -16,7 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from .const import DATA_WS_REGISTERED, DOMAIN, VERSION
 from .fpcalc import FpcalcError
 from .ident import IdentError, guess_from_name
-from .library import TAG_KEYS, LibraryError, build_name, read_cover, read_tags
+from .library import TAG_KEYS, LibraryError, build_name, cover_damaged, read_cover, read_tags, write_cover
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -270,8 +270,9 @@ async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         url = msg["cover"]
         if url and msg["cover_if_missing"]:
             real = d.library.check(msg["path"])
-            if await hass.async_add_executor_job(read_cover, real):
-                url = ""  # il file ha già una copertina: non serve nemmeno scaricarla
+            have = await hass.async_add_executor_job(read_cover, real)
+            if have and not cover_damaged(have[0], have[1]):
+                url = ""  # il file ha già una copertina buona: non serve nemmeno scaricarla
         cover, warn = None, ""
         if url:
             try:
@@ -302,11 +303,20 @@ async def _download_cover(hass: HomeAssistant, url: str) -> tuple[bytes, str]:
             mime = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
             if not mime.startswith("image/"):
                 raise LibraryError("L'indirizzo della copertina non è un'immagine")
-            data = await r.content.read(8 * 1024 * 1024 + 1)
+            # tutta l'immagine, fino alla fine (prima si leggeva solo il primo pezzo arrivato: copertine troncate)
+            buf = bytearray()
+            async for chunk in r.content.iter_chunked(65536):
+                buf += chunk
+                if len(buf) > 8 * 1024 * 1024:
+                    raise LibraryError("Copertina troppo grande")
+            data = bytes(buf)
+            expected = r.headers.get("Content-Length")
+            if expected and expected.isdigit() and int(expected) != len(data):
+                raise LibraryError("Copertina scaricata a metà (connessione interrotta)")
     except (aiohttp.ClientError, TimeoutError) as err:
         raise LibraryError(f"Copertina non scaricata: {err}") from err
-    if len(data) > 8 * 1024 * 1024:
-        raise LibraryError("Copertina troppo grande")
+    if cover_damaged(data, mime):
+        raise LibraryError("Copertina scaricata rovinata")
     return data, mime
 
 
@@ -326,6 +336,35 @@ async def ws_audio(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         url = async_sign_path(hass, f"/api/ldmha/audio/{audio_key(real)}", timedelta(hours=2),
                               refresh_token_id=connection.refresh_token_id)
         return {"url": url}
+    await _run(connection, msg["id"], go())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/fix_cover", vol.Required("path"): str})
+@websocket_api.async_response
+async def ws_fix_cover(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Copertina rovinata (troncata) nel file: si riscarica intera dalla proposta salvata per quel brano.
+    Esito: «nessuna» (il file non ha copertina), «sana», «riparata», «senza proposta»."""
+    async def go() -> dict[str, Any]:
+        d = _data(hass)
+        real = d.library.check(msg["path"])
+        cur = await hass.async_add_executor_job(read_cover, real)
+        if not cur:
+            return {"result": "nessuna"}
+        if not cover_damaged(cur[0], cur[1]):
+            return {"result": "sana"}
+        ident = None
+        if d.library.db:
+            ident = (await hass.async_add_executor_job(d.library.db.ident_of, [real])).get(real, (None, False))[0]
+        tags = await hass.async_add_executor_job(read_tags, real)
+        cands = [c for c in (ident or {}).get("candidates") or [] if c.get("cover")]
+        pick = next((c for c in cands if tags.get("musicbrainz_trackid") and c.get("mbid") == tags["musicbrainz_trackid"]),
+                    cands[0] if cands else None)
+        if not pick:
+            return {"result": "senza proposta"}
+        data, mime = await _download_cover(hass, pick["cover"])
+        await hass.async_add_executor_job(write_cover, real, data, mime)
+        return {"result": "riparata"}
     await _run(connection, msg["id"], go())
 
 

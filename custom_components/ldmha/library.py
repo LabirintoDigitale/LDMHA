@@ -123,6 +123,18 @@ def read_cover(path: str) -> tuple[bytes, str] | None:
     return None
 
 
+def cover_damaged(data: bytes, mime: str = "") -> bool:
+    """Immagine troncata: un JPEG deve finire con FFD9, un PNG con il blocco IEND."""
+    if not data:
+        return True
+    tail = data.rstrip(b"\x00")[-16:]
+    if data[:2] == b"\xff\xd8":
+        return not tail.endswith(b"\xff\xd9")
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return b"IEND" not in tail
+    return False
+
+
 def write_cover(path: str, data: bytes, mime: str) -> None:
     """Mette la copertina nel file (al posto di quella che c'era). MP3, FLAC, M4A, OGG e Opus."""
     from mutagen import File
@@ -492,7 +504,8 @@ class Library:
             write_tags(real, tags)
         old_cover = None
         cover_warn = ""
-        if cover and cover_if_missing and read_cover(real):
+        have = read_cover(real) if cover and cover_if_missing else None
+        if have and not cover_damaged(have[0], have[1]):
             cover = None  # il file ha già una copertina e si è scelto di aggiungerla solo se manca
         if cover:
             prev = read_cover(real)
