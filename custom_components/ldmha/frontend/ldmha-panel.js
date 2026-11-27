@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.2";
+const PANEL_VERSION = "0.7.3";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -139,7 +139,7 @@ class LdmhaPanel extends HTMLElement {
             .map(([v, t]) => `<option value="${v}" ${v === this.s.cover ? "selected" : ""}>${t}</option>`).join("")}</select>
       </div>
       <div class="bar acts">
-        ${run ? `<button id="stop" class="pri">■ Ferma (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
+        ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
           : `<button id="idall" class="pri" title="Riconosce i brani dell'elenco non ancora riconosciuti">Riconosci tutti</button>`}
         <button id="safe" title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}">Applica i sicuri</button>
         <span class="sep"></span>
@@ -686,7 +686,7 @@ class LdmhaPanel extends HTMLElement {
 
   async identifyMany(list) {
     if (!list.length || this.s.running) return;
-    this.s.running = true; this.s.done = 0; this.s.total = list.length;
+    this.s.running = true; this.s.runLabel = "riconosco"; this.s.done = 0; this.s.total = list.length;
     this.renderTop();
     let k = 0;
     const work = async () => {
@@ -695,7 +695,7 @@ class LdmhaPanel extends HTMLElement {
         if (r.status !== "cestino") await this.identify(r);
         this.s.done++;
         const pb = this.shadowRoot.querySelector("#top progress");
-        if (pb) { pb.value = this.s.done; this.shadowRoot.getElementById("stop").textContent = `■ Ferma (${this.s.done}/${this.s.total})`; }
+        if (pb) { pb.value = this.s.done; this.shadowRoot.getElementById("stop").textContent = `■ Ferma riconosco (${this.s.done}/${this.s.total})`; }
       }
     };
     await Promise.all(Array.from({ length: WORKERS }, work));
@@ -785,11 +785,27 @@ class LdmhaPanel extends HTMLElement {
     this.touch(r);
   }
 
+  // lavori su tanti brani (applica, cestino): uno alla volta, con avanzamento e «Ferma» nella barra in alto
+  async runMany(label, list, fn) {
+    if (!list.length || this.s.running) return;
+    this.s.running = true; this.s.runLabel = label; this.s.done = 0; this.s.total = list.length;
+    this.renderTop();
+    for (const r of list) {
+      if (!this.s.running) { this.log(`${label}: fermato dopo ${this.s.done} brani su ${this.s.total}`); break; }
+      await fn(r);
+      this.s.done++;
+      const pb = this.shadowRoot.querySelector("#top progress");
+      if (pb) { pb.value = this.s.done; this.shadowRoot.getElementById("stop").textContent = `■ Ferma ${label} (${this.s.done}/${this.s.total})`; }
+    }
+    this.s.running = false; this.s.runLabel = "";
+    this.renderTop();
+    this.refreshView();
+  }
+
   async applyMany(list) {
     if (!list.length) return;
     if (!confirm(`Applicare tag${this.s.pattern ? " e nome nuovo" : ""} a ${list.length} brani?\n(Ogni modifica si può annullare dalla cronologia.)`)) return;
-    for (const r of list) await this.apply(r);
-    this.renderTop();
+    await this.runMany("applico", list, (r) => this.apply(r));
   }
 
   applySafe() {
@@ -802,7 +818,7 @@ class LdmhaPanel extends HTMLElement {
     if (!list.length) return;
     if (!confirm(one ? `Spostare nel cestino «${base(list[0].file.path)}»?\n(Si può rimettere a posto dalla cronologia.)`
       : `Spostare nel cestino ${list.length} brani?\n(Si possono rimettere a posto dalla cronologia.)`)) return;
-    for (const r of list) {
+    const one1 = async (r) => {
       try {
         const res = await this.ws({ type: "ldmha/trash", path: r.file.path });
         r.entry = res.entry; r.status = "cestino"; r.err = "";
@@ -811,7 +827,8 @@ class LdmhaPanel extends HTMLElement {
         this.sel.delete(r.file.path);
       } catch (e) { r.err = e.message || String(e); this.log(`Cestino non riuscito: ${r.err}`, r.file.path, "ko"); }
       this.touch(r);
-    }
+    };
+    if (one) await one1(list[0]); else await this.runMany("cestino", list, one1);
     this.markDups();
     this.renderTop();
   }
