@@ -1,3 +1,5 @@
+<img src="custom_components/ldmha/brand/icon.png" alt="LDMHA" width="128" align="right">
+
 # LDMHA
 
 Integrazione per Home Assistant che **mette in ordine la musica**: un pannello nella barra laterale (visibile solo agli amministratori) per riconoscere i brani, correggere i tag, rinominare i file e togliere i doppioni.

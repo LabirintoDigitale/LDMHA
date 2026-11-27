@@ -5,7 +5,8 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.4.0";
+const PANEL_VERSION = "0.4.1";
+const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
 const ROW = 30; // altezza di una riga della tabella (px)
@@ -76,7 +77,7 @@ class LdmhaPanel extends HTMLElement {
   // ================================================================ struttura
   renderShell() {
     this.shadowRoot.innerHTML = `<style>${CSS}</style>
-      <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><h1>LDMHA</h1>
+      <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><img class="logo" src="${ICON}" alt=""><h1>LDMHA</h1>
         <nav><button data-tab="brani" class="on">Brani</button><button data-tab="registro">Registro</button><button data-tab="cronologia">Cronologia</button></nav></header>
       <div id="top"></div>
       <div id="main"><aside id="tree"></aside><section id="list"></section><section id="det" hidden></section></div>
@@ -784,6 +785,7 @@ const CSS = `
   font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); font-size: 13px; outline: none; }
 [hidden] { display: none !important; }
 header { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 12px; flex: none; background: var(--app-header-background-color, var(--primary-color)); color: var(--app-header-text-color, #fff); }
+header .logo { width: 36px; height: 36px; border-radius: 8px; flex: none; }
 header h1 { font-size: 20px; font-weight: 400; margin: 0; flex: 1; }
 header button { background: none; border: none; color: inherit; font-size: 14px; padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 header .menu { font-size: 22px; } header nav button.on { background: rgba(255,255,255,.2); }
