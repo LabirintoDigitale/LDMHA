@@ -11,6 +11,8 @@ Integrazione per Home Assistant che **mette in ordine la musica**: un pannello n
 
 Il pannello regge anche librerie grandi: albero delle cartelle a sinistra, tabella compatta (ordinabile, con ricerca e filtri: da riconoscere, sicuri, incerti, doppioni…), selezione multipla (con Maiusc per un intervallo) e scheda del brano a destra. Con la scheda aperta: ↑ ↓ per passare al brano vicino, Invio per applicare e andare al successivo.
 
+**Archivio**: i brani letti (con i tag) e i riconoscimenti restano salvati in `ldmha/ldmha.db` nella configurazione di Home Assistant. Riaprendo una cartella già letta l'elenco compare subito; *⟳ Aggiorna* la rilegge dal disco aprendo solo i file nuovi o cambiati e toglie quelli spariti. Dalla scheda *Registro* si può svuotare l'archivio (i file non vengono toccati).
+
 Dopo le modifiche, Music Assistant vede i nomi e i tag nuovi alla prossima sincronizzazione della libreria.
 
 ## Installazione

@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.3.0";
+const PANEL_VERSION = "0.4.0";
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
 const ROW = 30; // altezza di una riga della tabella (px)
@@ -97,7 +97,7 @@ class LdmhaPanel extends HTMLElement {
     r.getElementById("hist").hidden = t !== "cronologia";
     r.getElementById("logv").hidden = t !== "registro";
     if (t === "cronologia") this.renderHistory();
-    if (t === "registro") this.renderLog();
+    if (t === "registro") this.ws({ type: "ldmha/info" }).then((i) => { this.s.info = i; }).catch(() => {}).finally(() => this.renderLog());
   }
 
   renderAll() { this.renderTop(); this.renderTree(); this.renderList(); this.renderDetail(); }
@@ -119,7 +119,7 @@ class LdmhaPanel extends HTMLElement {
         <button id="treeb" class="ic" title="Mostra / nascondi le cartelle">☰ Cartelle</button>
         <span class="crumbs">${this.crumbs()}</span>
         <label class="chk" title="Mostra anche i brani nelle sottocartelle"><input type="checkbox" id="rec" ${this.s.recursive ? "checked" : ""}> Sottocartelle</label>
-        <button id="reload" class="ic" title="Rileggi la cartella">⟳</button>
+        <button id="reload" class="ic" title="Aggiorna dal disco (apre solo i file nuovi o cambiati)">⟳ Aggiorna</button>
       </div>
       <div class="bar">
         <input id="q" type="search" placeholder="Cerca nell'elenco (nome, artista, titolo…)" value="${esc(this.s.q)}">
@@ -144,7 +144,7 @@ class LdmhaPanel extends HTMLElement {
     $("treeb").onclick = () => { this.s.tree = !this.s.tree; save({ tree: this.s.tree }); this.renderTree(); };
     top.querySelectorAll("[data-go]").forEach((b) => { b.onclick = () => this.openDir(b.dataset.go); });
     $("rec").onchange = (e) => { this.s.recursive = e.target.checked; save({ recursive: this.s.recursive }); this.openDir(this.s.path); };
-    $("reload").onclick = () => this.openDir(this.s.path);
+    $("reload").onclick = () => this.openDir(this.s.path, true);
     $("q").oninput = (e) => { this.s.q = e.target.value; clearTimeout(this._qt); this._qt = setTimeout(() => this.refreshView(), 200); };
     $("filter").onchange = (e) => { this.s.filter = e.target.value; this.refreshView(); };
     $("pattern").onchange = (e) => this.setPattern(e.target.value);
@@ -234,7 +234,8 @@ class LdmhaPanel extends HTMLElement {
   // ================================================================ elenco dei brani
   // lettura della cartella a blocchi: i brani arrivano a gruppi e compaiono subito, con quante cartelle sono state
   // lette e dove si è arrivati; si può fermare (restano quelli già letti)
-  async openDir(path) {
+  // refresh: rilegge dal disco (aprendo solo i file cambiati) invece di usare l'elenco salvato nell'archivio
+  async openDir(path, refresh = false) {
     this.s.running = false;
     this.stopScan();
     this.s.path = path;
@@ -251,15 +252,19 @@ class LdmhaPanel extends HTMLElement {
     let pending = false;
     const onEvent = (ev) => {
       if (scan !== this.s.scan) return; // lettura vecchia (nel frattempo si è aperta un'altra cartella)
-      if (ev.type === "start") { this.s.list.path = ev.path; this.s.list.dirs = ev.dirs; }
+      if (ev.type === "start") { this.s.list.path = ev.path; this.s.list.dirs = ev.dirs; scan.cached = ev.cached || 0; }
       else if (ev.type === "files") {
-        for (const f of ev.files) this.rows.set(f.path, { file: f, status: "nuovo" });
+        for (const f of ev.files) this.rows.set(f.path, this.restore(f));
         scan.count = ev.count; scan.folders = ev.folders; scan.dir = ev.dir;
       } else if (ev.type === "done") {
         scan.done = true; scan.count = ev.count; scan.folders = ev.folders; this.s.list.truncated = ev.truncated;
-        this.log(`Letta la cartella ${path}: ${ev.count} brani in ${ev.folders} cartelle (${((Date.now() - scan.t) / 1000).toFixed(1)} s)`);
+        const secs = ((Date.now() - scan.t) / 1000).toFixed(1);
+        this.log(ev.cached
+          ? `Cartella ${path}: ${ev.count} brani dall'archivio (letti dal disco il ${new Date(ev.cached * 1000).toLocaleString()}) in ${secs} s`
+          : `Letta la cartella ${path}: ${ev.count} brani in ${ev.folders} cartelle, ${ev.opened} file aperti (nuovi o cambiati)${ev.removed ? `, ${ev.removed} tolti dall'archivio perché non ci sono più` : ""} (${secs} s)`);
         this.stopScan(false);
         this.markDups();
+        this.preview([...this.rows.values()].filter((r) => r.edit && r.status === "trovato"));
       } else if (ev.type === "error") {
         scan.done = true; scan.error = ev.message;
         this.log(`Errore leggendo ${path}: ${ev.message}`);
@@ -269,11 +274,26 @@ class LdmhaPanel extends HTMLElement {
       if (!pending) { pending = true; setTimeout(() => { pending = false; this.refreshView(); }, ev.type === "files" ? 400 : 0); }
     };
     try {
-      this._scanUnsub = await this._hass.connection.subscribeMessage(onEvent, { type: "ldmha/scan", path, recursive: this.s.recursive });
+      this._scanUnsub = await this._hass.connection.subscribeMessage(onEvent, { type: "ldmha/scan", path, recursive: this.s.recursive, refresh });
     } catch (e) {
       scan.done = true; scan.error = e.message || String(e);
       this.refreshView();
     }
+  }
+
+  // brano dall'archivio: tornano proposte, registro e "sistemato" dei riconoscimenti già fatti
+  restore(f) {
+    const r = { file: f, status: f.applied ? "fatto" : "nuovo" };
+    const id = f.ident;
+    if (id && !f.applied) {
+      r.cands = id.candidates || [];
+      r.note = id.note || "";
+      r.log = id.log || [];
+      r.status = r.cands.length ? "trovato" : "nontrovato";
+      if (r.cands.length) this.choose(r, r.cands[0], false);
+    } else if (id) r.log = id.log || [];
+    delete f.ident;
+    return r;
   }
 
   stopScan(user = true) {
@@ -362,7 +382,10 @@ class LdmhaPanel extends HTMLElement {
       ? `<div class="scan"><span class="spin"></span><span>Leggo… <b>${sc.count}</b> brani in ${sc.folders} cartelle${sc.dir && sc.dir !== "." ? ` · ora: ${esc(sc.dir)}` : ""}</span><button id="sstop">Ferma</button></div>`
       : sc.error ? `<div class="warn">${esc(sc.error)}</div>`
       : this.s.list.truncated ? `<div class="warn">Troppi brani: letti i primi ${sc.count}. Apri una sottocartella.</div>`
-      : sc.stopped ? `<div class="warn">Lettura fermata: ${sc.count} brani letti. <button id="sagain">Rileggi</button></div>` : "";
+      : sc.stopped ? `<div class="warn">Lettura fermata: ${sc.count} brani letti. <button id="sagain">Rileggi</button></div>`
+      : sc.cached ? `<div class="cache">Elenco salvato, letto dal disco il <b>${new Date(sc.cached * 1000).toLocaleString()}</b>. Se nel frattempo hai aggiunto o cambiato brani:
+          <button id="srefresh">⟳ Aggiorna dal disco</button> <span class="mut">(apre solo i file nuovi o cambiati)</span></div>` : "";
+    el.querySelector("#srefresh")?.addEventListener("click", () => this.openDir(this.s.path, true));
     el.querySelector("#sstop")?.addEventListener("click", () => this.stopScan());
     el.querySelector("#sagain")?.addEventListener("click", () => this.openDir(this.s.path));
     const files = this.rows.size;
@@ -525,7 +548,7 @@ class LdmhaPanel extends HTMLElement {
     else if (a === "undo") this.undo(r);
   }
 
-  choose(r, c) {
+  choose(r, c, update = true) {
     r.cand = c;
     if (!c) { r.edit = null; this.touch(r); return; }
     const t = r.file.tags || {};
@@ -534,6 +557,7 @@ class LdmhaPanel extends HTMLElement {
       albumartist: c.albumartist || t.albumartist || "", date: c.year || t.date || "", tracknumber: c.track || t.tracknumber || "",
       musicbrainz_trackid: c.mbid || "",
     };
+    if (!update) return;
     this.markDups();
     this.preview([r]);
   }
@@ -717,10 +741,19 @@ class LdmhaPanel extends HTMLElement {
   renderLog() {
     const el = this.shadowRoot.getElementById("logv");
     el.innerHTML = `<div class="bar"><span class="hint grow" style="text-align:left">Cosa ha fatto LDMHA in questa sessione (il più recente in cima). Con il pannello chiuso il registro si azzera; le modifiche ai file restano nella Cronologia.</span>
-      <button id="lclear">Svuota</button></div>
+      <button id="lclear">Svuota il registro</button></div>
+      <div class="bar"><span class="hint grow" style="text-align:left">Archivio: ${this.s.info?.db ? `${this.s.info.db.files} brani salvati, ${this.s.info.db.identified} riconosciuti, ${this.s.info.db.applied} sistemati` : "—"}.
+        Svuotandolo, la prossima apertura di ogni cartella rilegge tutto dal disco e i riconoscimenti salvati si perdono (i file non vengono toccati).</span>
+        <button id="dbclear">Svuota l'archivio</button></div>
       ${this.logs.length ? `<div class="lg">${this.logs.map((l) => `<div class="lr ${l.kind}"><span class="mut">${l.t.toLocaleTimeString()}</span>
         <span>${l.file ? `<b>${esc(base(l.file))}</b> ` : ""}${esc(l.text)}</span></div>`).join("")}</div>` : `<div class="note">Ancora niente.</div>`}`;
     el.querySelector("#lclear").onclick = () => { this.logs = []; this.renderLog(); };
+    el.querySelector("#dbclear").onclick = async () => {
+      if (!confirm("Svuotare l'archivio di LDMHA?\nI file non vengono toccati: si perdono solo l'elenco salvato e i riconoscimenti non applicati.")) return;
+      try { await this.ws({ type: "ldmha/forget" }); this.log("Archivio svuotato"); } catch (e) { alert(e.message || e); }
+      this.s.info = await this.ws({ type: "ldmha/info" }).catch(() => this.s.info);
+      this.renderLog();
+    };
   }
 
   // ================================================================ cronologia
@@ -826,6 +859,8 @@ progress { width: 120px; }
 .lr.ko { color: var(--error-color, #c62828); } .lr.ok { color: #2e7d32; } .lr.run { color: #1976d2; }
 .dlog { margin-top: 10px; font-size: 12px; } .dlog summary { cursor: pointer; font-weight: 600; }
 .dlog ol { margin: 6px 0; padding-left: 20px; } .dlog li { margin: 2px 0; }
+.cache { padding: 6px 10px; background: rgba(76,175,80,.12); border-radius: 6px; margin: 4px 6px; }
+.cache button { margin: 0 4px; }
 .scan { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: rgba(3,169,244,.12); border-radius: 6px; margin: 4px 6px; }
 .scan span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .spin { width: 14px; height: 14px; border: 2px solid rgba(3,169,244,.3); border-top-color: var(--primary-color); border-radius: 50%; animation: sp .8s linear infinite; flex: none; }

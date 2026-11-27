@@ -27,6 +27,7 @@ from .const import (
     STATIC_URL,
     VERSION,
 )
+from .db import Db
 from .fpcalc import Fpcalc
 from .ident import Identifier
 from .library import Library
@@ -44,7 +45,9 @@ type LdmhaConfigEntry = ConfigEntry[LdmhaData]
 
 async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> bool:
     opts = entry.options
-    library = Library(hass, parse_roots(opts.get(CONF_ROOTS) or DEFAULT_ROOTS))
+    db = await hass.async_add_executor_job(Db, hass.config.path("ldmha", "ldmha.db"))
+    entry.async_on_unload(lambda: hass.async_add_executor_job(db.close))
+    library = Library(hass, parse_roots(opts.get(CONF_ROOTS) or DEFAULT_ROOTS), db)
     await library.async_load()
     fp = Fpcalc(hass)
     entry.runtime_data = LdmhaData(library, fp, Identifier(hass, fp, opts.get(CONF_ACOUSTID_KEY, "")))

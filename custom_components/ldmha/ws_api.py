@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 import voluptuous as vol
@@ -26,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_info, ws_dirs, ws_list, ws_scan, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_info, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -52,7 +53,8 @@ async def ws_info(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     async def go() -> dict[str, Any]:
         d = _data(hass)
         roots = await hass.async_add_executor_job(d.library.real_roots)
-        return {"version": VERSION, "roots": roots, "configured": d.library.roots,
+        stats = await hass.async_add_executor_job(d.library.db.stats) if d.library.db else {}
+        return {"version": VERSION, "roots": roots, "configured": d.library.roots, "db": stats,
                 "acoustid": bool(d.identifier.key), "fpcalc": d.fpcalc.status()}
     await _run(connection, msg["id"], go())
 
@@ -84,6 +86,7 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
     vol.Required("type"): "ldmha/scan",
     vol.Required("path"): str,
     vol.Optional("recursive", default=False): bool,
+    vol.Optional("refresh", default=False): bool,
 })
 @websocket_api.async_response
 async def ws_scan(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
@@ -102,7 +105,8 @@ async def ws_scan(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
             hass.loop.call_soon_threadsafe(connection.send_message, websocket_api.event_message(msg["id"], ev))
 
     try:
-        await hass.async_add_executor_job(lib.scan, msg["path"], msg["recursive"], send, stopped.is_set)
+        await hass.async_add_executor_job(lib.scan, msg["path"], msg["recursive"], send, stopped.is_set,
+                                          msg["refresh"])
     except LibraryError as err:
         send({"type": "error", "message": str(err)})
     except Exception as err:  # noqa: BLE001 - qualunque errore va mostrato nel pannello, non perso
@@ -119,10 +123,13 @@ async def ws_identify(hass: HomeAssistant, connection: websocket_api.ActiveConne
         real = d.library.check(msg["path"])
         tags = await hass.async_add_executor_job(read_tags, real)
         try:
-            return await d.identifier.identify(real, tags)
+            res = await d.identifier.identify(real, tags)
         except (IdentError, FpcalcError) as err:
             _LOGGER.warning("Riconoscimento di %s non riuscito: %s", real, err)
             raise
+        if d.library.db:  # resta nell'archivio: riaprendo la cartella le proposte ci sono ancora
+            await hass.async_add_executor_job(d.library.db.set_ident, real, {**res, "t": time.time()})
+        return res
     await _run(connection, msg["id"], go())
 
 
@@ -202,6 +209,19 @@ async def ws_trash(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         res = await hass.async_add_executor_job(d.library.trash, msg["path"])
         await d.library.async_commit()
         return res
+    await _run(connection, msg["id"], go())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/forget"})
+@websocket_api.async_response
+async def ws_forget(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Svuota l'archivio (brani letti e riconoscimenti): la prossima apertura rilegge tutto dal disco."""
+    async def go() -> dict[str, Any]:
+        db = _data(hass).library.db
+        if db:
+            await hass.async_add_executor_job(db.clear)
+        return {}
     await _run(connection, msg["id"], go())
 
 
