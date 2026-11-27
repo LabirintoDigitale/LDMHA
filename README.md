@@ -74,8 +74,6 @@ Il **lettore di Music Assistant a tutto schermo**, collegato a Home Assistant: c
 
 **Installazione**: apri il link dal telefono, scarica l'APK e installalo (Android chiede di consentire l'installazione da questa fonte la prima volta).
 
-Il ramo [`apk`](https://github.com/LabirintoDigitale/LDMHA/tree/apk) contiene `MusikHa.apk` e `version.json`, aggiornati automaticamente a ogni nuova versione.
-
 ---
 
 ## Licenza
