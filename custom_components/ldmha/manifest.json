@@ -15,9 +15,7 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/LabirintoDigitale/LDMHA/issues",
-  "requirements": [
-    "mutagen==1.47.0"
-  ],
+  "requirements": [],
   "single_config_entry": true,
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

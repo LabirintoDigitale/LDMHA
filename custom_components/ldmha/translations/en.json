@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "LDMHA",
-        "description": "LDMHA adds an admin-only sidebar panel to tidy up your music: it identifies tracks by their audio (AcoustID + MusicBrainz), fixes tags, renames files and removes duplicates.\n\nThe AcoustID key is free: create one at https://acoustid.org/new-application (without a key tracks are only searched by name and tags).",
+        "description": "LDMHA adds an admin-only sidebar panel to tidy up your music: it identifies tracks by their audio (AcoustID + MusicBrainz), fixes tags, renames files and removes duplicates.\n\nThe AcoustID key is free: create one at {acoustid_url} (without a key tracks are only searched by name and tags).",
         "data": {
           "acoustid_key": "AcoustID application key",
           "roots": "Music folders (comma separated)"
@@ -25,7 +25,7 @@
     "step": {
       "init": {
         "title": "LDMHA",
-        "description": "AcoustID key (free, from https://acoustid.org/new-application) and folders where LDMHA may read and rename tracks.",
+        "description": "AcoustID key (free, from {acoustid_url}) and folders where LDMHA may read and rename tracks.",
         "data": {
           "acoustid_key": "AcoustID application key",
           "roots": "Music folders (comma separated)"

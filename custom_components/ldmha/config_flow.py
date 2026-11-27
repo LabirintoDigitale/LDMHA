@@ -12,6 +12,9 @@ from homeassistant.core import callback
 
 from .const import CONF_ACOUSTID_KEY, CONF_ROOTS, DEFAULT_ROOTS, DOMAIN
 
+# pagina dove si crea la chiave AcoustID (gratuita), mostrata nella descrizione del modulo
+PLACEHOLDERS = {"acoustid_url": "https://acoustid.org/new-application"}
+
 
 def parse_roots(text: str) -> list[str]:
     """Cartelle separate da virgola o a capo, senza doppioni."""
@@ -52,7 +55,8 @@ class LdmhaConfigFlow(ConfigFlow, domain=DOMAIN):
             data, errors = await self.hass.async_add_executor_job(_check, user_input)
             if not errors:
                 return self.async_create_entry(title="LDMHA", data={}, options=data)
-        return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors)
+        return self.async_show_form(step_id="user", data_schema=_schema(user_input or {}), errors=errors,
+                                    description_placeholders=PLACEHOLDERS)
 
     @staticmethod
     @callback
@@ -68,4 +72,5 @@ class LdmhaOptionsFlow(OptionsFlow):
             if not errors:
                 return self.async_create_entry(data=data)
         values = {**self.config_entry.options, **(user_input or {})}
-        return self.async_show_form(step_id="init", data_schema=_schema(values), errors=errors)
+        return self.async_show_form(step_id="init", data_schema=_schema(values), errors=errors,
+                                    description_placeholders=PLACEHOLDERS)

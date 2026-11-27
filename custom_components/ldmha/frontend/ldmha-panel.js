@@ -3,7 +3,7 @@
 // cestino; ogni modifica resta nella cronologia e si può annullare.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.1.0";
+const PANEL_VERSION = "0.1.1";
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
 const PATTERNS = [
