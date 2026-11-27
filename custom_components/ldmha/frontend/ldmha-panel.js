@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.7.6";
+const PANEL_VERSION = "0.7.7";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -61,7 +61,12 @@ class LdmhaPanel extends HTMLElement {
     this.shadowRoot.querySelector(".menu")?.toggleAttribute("hidden", !v);
   }
 
-  ws(msg) { return this._hass.callWS(msg); }
+  ws(msg, timeout = 0) {
+    const p = this._hass.callWS(msg);
+    if (!timeout) return p;
+    // risposta che non arriva (connessione con Home Assistant caduta un attimo): non si resta in attesa per sempre
+    return Promise.race([p, new Promise((_, ko) => setTimeout(() => ko(new Error(`nessuna risposta da Home Assistant in ${Math.round(timeout / 60000)} minuti (connessione caduta?): riprova`)), timeout))]);
+  }
 
   async start() {
     this.renderShell();
@@ -711,7 +716,7 @@ class LdmhaPanel extends HTMLElement {
     this.touch(r);
     try {
       this.log("Riconoscimento avviato", r.file.path, "run");
-      const res = await this.ws({ type: "ldmha/identify", path: r.file.path });
+      const res = await this.ws({ type: "ldmha/identify", path: r.file.path }, 180000);
       r.cands = res.candidates || [];
       r.note = res.note || "";
       r.log = res.log || [];
