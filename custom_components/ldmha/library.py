@@ -13,7 +13,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import AUDIO_EXT, MAX_FILES, TRASH_DIR
+from .const import AUDIO_EXT, MAX_FILES, SCAN_BATCH, TRASH_DIR
 
 TAG_KEYS = ("title", "artist", "album", "albumartist", "date", "tracknumber", "musicbrainz_trackid")
 HISTORY_MAX = 1000
@@ -171,6 +171,64 @@ class Library:
         except OSError as err:
             raise LibraryError(f"Cartella non leggibile: {err}") from err
         return {"path": real, "dirs": names}
+
+    def scan(self, path: str, recursive: bool, send, stop) -> None:
+        """Lettura a blocchi (nel filo dell'executor): manda al pannello i brani a gruppi, con le cartelle lette e
+        quella in corso, così con migliaia di file sul NAS si vede subito qualcosa. stop() = il pannello ha smesso."""
+        real = self.check(path)
+        if not os.path.isdir(real):
+            raise LibraryError("Non è una cartella")
+        root = self.root_of(real)
+        try:
+            top = sorted((e for e in os.scandir(real) if not e.name.startswith(".")), key=lambda e: e.name.lower())
+        except OSError as err:
+            raise LibraryError(f"Cartella non leggibile: {err}") from err
+        dirs = [e.name for e in top if e.is_dir(follow_symlinks=False)]
+        send({"type": "start", "path": real, "root": root, "dirs": dirs})
+        batch: list[dict[str, Any]] = []
+        count, folders, last = 0, 0, time.monotonic()
+
+        def flush(cur: str) -> None:
+            nonlocal batch, last
+            send({"type": "files", "files": batch, "count": count, "folders": folders, "dir": os.path.relpath(cur, real)})
+            batch = []
+            last = time.monotonic()
+
+        def walk():
+            yield real, [e.name for e in top if not e.is_dir(follow_symlinks=False)]
+            if not recursive:
+                return
+            for d in dirs:
+                for base, sub, names in os.walk(os.path.join(real, d)):
+                    sub[:] = sorted(s for s in sub if not s.startswith("."))
+                    yield base, names
+
+        for folder, names in walk():
+            if stop():
+                return
+            folders += 1
+            for n in sorted(names, key=str.lower):
+                if os.path.splitext(n)[1].lower() not in AUDIO_EXT:
+                    continue
+                if count >= MAX_FILES:
+                    flush(folder)
+                    send({"type": "done", "count": count, "folders": folders, "truncated": True})
+                    return
+                fp = os.path.join(folder, n)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                batch.append({"path": fp, "name": os.path.relpath(fp, real), "size": st.st_size, "tags": read_tags(fp)})
+                count += 1
+                if len(batch) >= SCAN_BATCH or time.monotonic() - last > 1:
+                    if stop():
+                        return
+                    flush(folder)
+            if time.monotonic() - last > 1:  # cartelle senza brani: almeno si vede dove si è arrivati
+                flush(folder)
+        flush(real)
+        send({"type": "done", "count": count, "folders": folders, "truncated": False})
 
     def list_dir(self, path: str, recursive: bool) -> dict[str, Any]:
         real = self.check(path)

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
 from typing import Any
 
 import voluptuous as vol
@@ -15,6 +17,8 @@ from .fpcalc import FpcalcError
 from .ident import IdentError, guess_from_name
 from .library import TAG_KEYS, LibraryError, build_name, read_tags
 
+_LOGGER = logging.getLogger(__name__)
+
 TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_KEYS}, extra=vol.REMOVE_EXTRA)
 
 
@@ -22,7 +26,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_info, ws_dirs, ws_list, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_info, ws_dirs, ws_list, ws_scan, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -76,6 +80,37 @@ async def ws_list(hass: HomeAssistant, connection: websocket_api.ActiveConnectio
 
 
 @websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/scan",
+    vol.Required("path"): str,
+    vol.Optional("recursive", default=False): bool,
+})
+@websocket_api.async_response
+async def ws_scan(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Lettura della cartella a blocchi: eventi start / files (a gruppi) / done / error; il pannello può fermarla."""
+    try:
+        lib = _data(hass).library
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    stopped = threading.Event()
+    connection.subscriptions[msg["id"]] = stopped.set
+    connection.send_result(msg["id"])
+
+    def send(ev: dict[str, Any]) -> None:
+        if not stopped.is_set():
+            hass.loop.call_soon_threadsafe(connection.send_message, websocket_api.event_message(msg["id"], ev))
+
+    try:
+        await hass.async_add_executor_job(lib.scan, msg["path"], msg["recursive"], send, stopped.is_set)
+    except LibraryError as err:
+        send({"type": "error", "message": str(err)})
+    except Exception as err:  # noqa: BLE001 - qualunque errore va mostrato nel pannello, non perso
+        _LOGGER.exception("Lettura di %s non riuscita", msg["path"])
+        send({"type": "error", "message": f"Lettura non riuscita: {err}"})
+
+
+@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): "ldmha/identify", vol.Required("path"): str})
 @websocket_api.async_response
 async def ws_identify(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
@@ -83,7 +118,11 @@ async def ws_identify(hass: HomeAssistant, connection: websocket_api.ActiveConne
         d = _data(hass)
         real = d.library.check(msg["path"])
         tags = await hass.async_add_executor_job(read_tags, real)
-        return await d.identifier.identify(real, tags)
+        try:
+            return await d.identifier.identify(real, tags)
+        except (IdentError, FpcalcError) as err:
+            _LOGGER.warning("Riconoscimento di %s non riuscito: %s", real, err)
+            raise
     await _run(connection, msg["id"], go())
 
 

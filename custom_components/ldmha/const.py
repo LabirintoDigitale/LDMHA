@@ -1,7 +1,7 @@
 """Costanti dell'integrazione LDMHA."""
 
 DOMAIN = "ldmha"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 PANEL_URL = "ldmha"
 PANEL_TITLE = "LDMHA"
@@ -28,7 +28,8 @@ AUDIO_EXT = {".mp3", ".flac", ".m4a", ".mp4", ".aac", ".ogg", ".oga", ".opus", "
 # cartella (dentro ogni cartella principale) dove finiscono i brani tolti: si possono rimettere a posto dalla cronologia
 TRASH_DIR = ".ldmha_cestino"
 
-MAX_FILES = 3000  # massimo di brani elencati in una volta (con le sottocartelle)
+MAX_FILES = 30000  # massimo di brani elencati in una volta (con le sottocartelle)
+SCAN_BATCH = 100  # brani mandati al pannello per volta durante la lettura
 
 FPCALC_VERSION = "1.6.0"
 FPCALC_URL = "https://github.com/acoustid/chromaprint/releases/download/v{v}/chromaprint-fpcalc-{v}-linux-{arch}.tar.gz"

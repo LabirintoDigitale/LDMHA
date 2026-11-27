@@ -5,6 +5,7 @@ Si rispettano i limiti dei due servizi: AcoustID al massimo 3 richieste al secon
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -17,6 +18,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import USER_AGENT
 from .fpcalc import Fpcalc, FpcalcError
+
+_LOGGER = logging.getLogger(__name__)
 
 ACOUSTID_URL = "https://api.acoustid.org/v2/lookup"
 MB_URL = "https://musicbrainz.org/ws/2"
@@ -166,16 +169,29 @@ class Identifier:
                 self._mb_cache.pop(next(iter(self._mb_cache)))
         return self._mb_cache[mbid]
 
-    async def by_fingerprint(self, path: str) -> tuple[int, list[dict[str, Any]]]:
+    async def by_fingerprint(self, path: str, log: list[str] | None = None) -> tuple[int, list[dict[str, Any]]]:
+        log = log if log is not None else []
+        t0 = time.monotonic()
         duration, fp = await self.fpcalc.fingerprint(path)
+        log.append(f"Impronta audio calcolata in {time.monotonic() - t0:.1f} s (primi {min(duration, 120)} s di "
+                   f"{duration // 60}:{duration % 60:02d})")
         if not self.key:
+            log.append("Nessuna chiave AcoustID: l'impronta non si può cercare")
             return duration, []
+        t0 = time.monotonic()
         data = await self._get(ACOUSTID_URL, {"client": self.key, "duration": duration, "fingerprint": fp,
                                               "meta": "recordings releasegroups compress", "format": "json"},
                                self._ac, method="POST")
         if data.get("status") != "ok":
             err = data.get("error") or {}
+            log.append(f"AcoustID ha risposto con un errore: {err.get('message') or 'sconosciuto'}")
             raise IdentError(f"AcoustID: {err.get('message') or 'errore'}")
+        res = data.get("results") or []
+        best = max((float(r.get("score") or 0) for r in res), default=0)
+        with_rec = sum(1 for r in res if r.get("recordings"))
+        log.append(f"AcoustID ({time.monotonic() - t0:.1f} s): {len(res)} impronte simili"
+                   + (f", la migliore al {round(best * 100)}%, {with_rec} con il brano collegato" if res else
+                      " — brano sconosciuto ad AcoustID"))
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
         for res in sorted(data.get("results") or [], key=lambda r: -float(r.get("score") or 0)):
@@ -227,26 +243,56 @@ class Identifier:
         return {**cand, **{k: v for k, v in full.items() if v and k not in ("score", "source")}}
 
     async def identify(self, path: str, tags: dict[str, str]) -> dict[str, Any]:
-        duration, cands, note = 0, [], ""
+        duration, cands, note, log = 0, [], "", []
+        t_all = time.monotonic()
         try:
-            duration, cands = await self.by_fingerprint(path)
+            duration, cands = await self.by_fingerprint(path, log)
             if not self.key:
                 note = "Senza chiave AcoustID il riconoscimento dall'audio non è attivo: cerco per nome e tag"
             elif not cands:
                 note = "Impronta audio non trovata su AcoustID: cerco per nome e tag"
         except FpcalcError as err:
+            log.append(f"Impronta audio non riuscita: {err}")
             note = f"Impronta audio non riuscita ({err}): cerco per nome e tag"
+        except IdentError as err:
+            log.append(f"AcoustID non disponibile: {err}")
+            note = f"{err}: cerco per nome e tag"
         if cands:
+            log.append(f"Proposte dall'audio: {len(cands)}; la prima è «{cands[0]['artist']} — {cands[0]['title']}»")
+            t0 = time.monotonic()
+            before = dict(cands[0])
             cands[0] = await self.enrich(cands[0])
+            got = [k for k in ("album", "year", "track") if cands[0].get(k) and cands[0].get(k) != before.get(k)]
+            log.append(f"MusicBrainz ({time.monotonic() - t0:.1f} s): "
+                       + (f"aggiunti {', '.join({'album': 'album', 'year': 'anno', 'track': 'numero di traccia'}[k] for k in got)}"
+                          if got else "nessun dettaglio in più"))
         else:
             artist, title = guess_from_name(path, tags)
-            cands = await self.by_text(artist, title)
-            if not cands and artist and title:
-                cands = await self.by_text("", f"{artist} {title}", query=f"{_lucene(artist)} {_lucene(title)}")
+            log.append(f"Ricerca per nome su MusicBrainz: artista «{artist or '?'}», titolo «{title or '?'}»"
+                       + (" (dai tag)" if tags.get("artist") and tags.get("title") else " (dal nome del file)"))
+            t0 = time.monotonic()
+            try:
+                cands = await self.by_text(artist, title)
+                if not cands and artist and title:
+                    log.append("Nessun risultato esatto: riprovo con una ricerca libera")
+                    cands = await self.by_text("", f"{artist} {title}", query=f"{_lucene(artist)} {_lucene(title)}")
+                log.append(f"MusicBrainz ({time.monotonic() - t0:.1f} s): {len(cands)} risultati")
+            except IdentError as err:
+                log.append(f"MusicBrainz non disponibile: {err}")
+                note = (note + " — " if note else "") + str(err)
+                cands = []
             # a parità di nome, meglio la registrazione con la durata più vicina a quella del file
             if duration:
+                far = 0
                 for c in cands:
                     if c.get("duration") and abs(c["duration"] - duration) > 15:
                         c["score"] = round(c["score"] * 0.6, 3)
+                        far += 1
+                if far:
+                    log.append(f"{far} risultati hanno una durata diversa dal file (oltre 15 s): sicurezza ridotta")
                 cands.sort(key=lambda c: -c["score"])
-        return {"duration": duration, "candidates": cands, "note": note}
+        log.append(f"Fatto in {time.monotonic() - t_all:.1f} s: "
+                   + (f"migliore «{cands[0]['artist']} — {cands[0]['title']}» al {round(cands[0]['score'] * 100)}%"
+                      if cands else "nessuna proposta"))
+        _LOGGER.debug("Riconoscimento di %s: %s", path, " | ".join(log))
+        return {"duration": duration, "candidates": cands, "note": note, "log": log}

@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.2.0";
+const PANEL_VERSION = "0.3.0";
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
 const ROW = 30; // altezza di una riga della tabella (px)
@@ -48,6 +48,7 @@ class LdmhaPanel extends HTMLElement {
     this.sel = new Set(); // percorsi selezionati
     this.nodes = new Map(); // albero: percorso -> {dirs: [...] | null, open}
     this._raf = 0;
+    this.logs = []; // registro di questa sessione del pannello (il più recente in cima)
   }
 
   set hass(h) { const first = !this._hass; this._hass = h; if (first) this.start(); }
@@ -76,10 +77,10 @@ class LdmhaPanel extends HTMLElement {
   renderShell() {
     this.shadowRoot.innerHTML = `<style>${CSS}</style>
       <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><h1>LDMHA</h1>
-        <nav><button data-tab="brani" class="on">Brani</button><button data-tab="cronologia">Cronologia</button></nav></header>
+        <nav><button data-tab="brani" class="on">Brani</button><button data-tab="registro">Registro</button><button data-tab="cronologia">Cronologia</button></nav></header>
       <div id="top"></div>
       <div id="main"><aside id="tree"></aside><section id="list"></section><section id="det" hidden></section></div>
-      <div id="hist" hidden></div>`;
+      <div id="hist" hidden></div><div id="logv" hidden></div>`;
     const r = this.shadowRoot;
     r.querySelector(".menu").onclick = () => this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
     r.querySelectorAll("[data-tab]").forEach((b) => { b.onclick = () => this.setTab(b.dataset.tab); });
@@ -93,8 +94,10 @@ class LdmhaPanel extends HTMLElement {
     r.querySelectorAll("[data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === t));
     r.getElementById("top").hidden = t !== "brani";
     r.getElementById("main").hidden = t !== "brani";
-    r.getElementById("hist").hidden = t === "brani";
+    r.getElementById("hist").hidden = t !== "cronologia";
+    r.getElementById("logv").hidden = t !== "registro";
     if (t === "cronologia") this.renderHistory();
+    if (t === "registro") this.renderLog();
   }
 
   renderAll() { this.renderTop(); this.renderTree(); this.renderList(); this.renderDetail(); }
@@ -142,8 +145,8 @@ class LdmhaPanel extends HTMLElement {
     top.querySelectorAll("[data-go]").forEach((b) => { b.onclick = () => this.openDir(b.dataset.go); });
     $("rec").onchange = (e) => { this.s.recursive = e.target.checked; save({ recursive: this.s.recursive }); this.openDir(this.s.path); };
     $("reload").onclick = () => this.openDir(this.s.path);
-    $("q").oninput = (e) => { this.s.q = e.target.value; clearTimeout(this._qt); this._qt = setTimeout(() => this.renderList(), 200); };
-    $("filter").onchange = (e) => { this.s.filter = e.target.value; this.renderList(); };
+    $("q").oninput = (e) => { this.s.q = e.target.value; clearTimeout(this._qt); this._qt = setTimeout(() => this.refreshView(), 200); };
+    $("filter").onchange = (e) => { this.s.filter = e.target.value; this.refreshView(); };
     $("pattern").onchange = (e) => this.setPattern(e.target.value);
     $("preset").onchange = (e) => { if (e.target.value) { $("pattern").value = e.target.value; this.setPattern(e.target.value); } e.target.value = ""; };
     if (run) $("stop").onclick = () => { this.s.running = false; };
@@ -229,27 +232,59 @@ class LdmhaPanel extends HTMLElement {
   }
 
   // ================================================================ elenco dei brani
+  // lettura della cartella a blocchi: i brani arrivano a gruppi e compaiono subito, con quante cartelle sono state
+  // lette e dove si è arrivati; si può fermare (restano quelli già letti)
   async openDir(path) {
     this.s.running = false;
+    this.stopScan();
     this.s.path = path;
     save({ path });
-    this.s.loading = true;
-    this.s.list = null;
+    this.s.list = { path, dirs: [], files: 0, truncated: false };
+    this.s.scan = { count: 0, folders: 0, dir: "", done: false, t: Date.now() };
     this.s.open = null;
     this.rows.clear();
     this.sel.clear();
     const n = await this.loadNode(path);
     n.open = true;
     this.renderAll();
+    const scan = this.s.scan;
+    let pending = false;
+    const onEvent = (ev) => {
+      if (scan !== this.s.scan) return; // lettura vecchia (nel frattempo si è aperta un'altra cartella)
+      if (ev.type === "start") { this.s.list.path = ev.path; this.s.list.dirs = ev.dirs; }
+      else if (ev.type === "files") {
+        for (const f of ev.files) this.rows.set(f.path, { file: f, status: "nuovo" });
+        scan.count = ev.count; scan.folders = ev.folders; scan.dir = ev.dir;
+      } else if (ev.type === "done") {
+        scan.done = true; scan.count = ev.count; scan.folders = ev.folders; this.s.list.truncated = ev.truncated;
+        this.log(`Letta la cartella ${path}: ${ev.count} brani in ${ev.folders} cartelle (${((Date.now() - scan.t) / 1000).toFixed(1)} s)`);
+        this.stopScan(false);
+        this.markDups();
+      } else if (ev.type === "error") {
+        scan.done = true; scan.error = ev.message;
+        this.log(`Errore leggendo ${path}: ${ev.message}`);
+        this.stopScan(false);
+      }
+      this.s.list.files = this.rows.size;
+      if (!pending) { pending = true; setTimeout(() => { pending = false; this.refreshView(); }, ev.type === "files" ? 400 : 0); }
+    };
     try {
-      this.s.list = await this.ws({ type: "ldmha/list", path, recursive: this.s.recursive });
-      for (const f of this.s.list.files) this.rows.set(f.path, { file: f, status: "nuovo" });
-      this.markDups();
+      this._scanUnsub = await this._hass.connection.subscribeMessage(onEvent, { type: "ldmha/scan", path, recursive: this.s.recursive });
     } catch (e) {
-      this.s.list = { path, dirs: [], files: [], error: e.message || String(e) };
+      scan.done = true; scan.error = e.message || String(e);
+      this.refreshView();
     }
-    this.s.loading = false;
-    this.renderAll();
+  }
+
+  stopScan(user = true) {
+    const u = this._scanUnsub;
+    this._scanUnsub = null;
+    if (u) u().catch?.(() => {});
+    if (user && this.s.scan && !this.s.scan.done) {
+      this.s.scan.done = true; this.s.scan.stopped = true;
+      this.log(`Lettura fermata: ${this.s.scan.count} brani letti`);
+      this.refreshView();
+    }
   }
 
   match(r) {
@@ -284,29 +319,18 @@ class LdmhaPanel extends HTMLElement {
     }
   }
 
+  // struttura dell'elenco (una volta per cartella o filtro); i dati si aggiornano con refreshView
   renderList() {
     const el = this.shadowRoot.getElementById("list");
-    const l = this.s.list;
-    if (this.s.loading || !l) {
-      el.innerHTML = `<div class="note">${this.s.path ? "Leggo la cartella… (con tante sottocartelle sul NAS può volerci un po')" : ""}</div>`;
-      this.view = []; this.updateCount();
-      return;
-    }
-    if (l.error) { el.innerHTML = `<div class="warn">${esc(l.error)}</div>`; return; }
-    const k = (r) => this.sortKey(r);
-    this.view = [...this.rows.values()].filter((r) => this.match(r))
-      .sort((a, b) => { const x = k(a), y = k(b); return (x < y ? -1 : x > y ? 1 : 0) * (this.s.desc ? -1 : 1); });
-    const allSel = this.view.length && this.view.every((r) => this.sel.has(r.file.path));
+    if (!this.s.list) { el.innerHTML = ""; this.view = []; return; }
     const grid = COLS.map((c) => c[2]).join(" ");
-    el.innerHTML = `${l.truncated ? `<div class="warn">Troppi brani: ne mostro solo i primi ${l.files.length}. Apri una sottocartella.</div>` : ""}
-      ${!l.files.length ? `<div class="note">Nessun brano in questa cartella${this.s.recursive ? "" : " (attiva «Sottocartelle» per vedere anche quelli dentro)"}.</div>` : ""}
+    el.innerHTML = `<div id="scanbar"></div><div id="lnote"></div>
       <div class="vp" id="vp">
       <div class="th" style="grid-template-columns:${grid}">
-        <span><input type="checkbox" id="all" title="Seleziona tutti quelli in elenco" ${allSel ? "checked" : ""}></span>
+        <span><input type="checkbox" id="all" title="Seleziona tutti quelli in elenco"></span>
         ${COLS.slice(1).map(([key, lab]) => `<button data-sort="${key}" class="${this.s.sort === key ? "on" : ""}">${lab}${this.s.sort === key ? (this.s.desc ? " ▾" : " ▴") : ""}</button>`).join("")}
       </div>
-      <div class="sp" id="sp" style="height:${this.view.length * ROW}px"></div></div>
-      ${l.files.length && !this.view.length ? `<div class="note">Nessun brano con questo filtro.</div>` : ""}`;
+      <div class="sp" id="sp"></div></div>`;
     el.querySelector("#all").onchange = (e) => {
       for (const r of this.view) e.target.checked ? this.sel.add(r.file.path) : this.sel.delete(r.file.path);
       this.renderTop(); this.paint();
@@ -321,7 +345,30 @@ class LdmhaPanel extends HTMLElement {
     const vp = el.querySelector("#vp");
     vp.onscroll = () => { if (!this._raf) this._raf = requestAnimationFrame(() => { this._raf = 0; this.paint(); }); };
     vp.onclick = (e) => this.onRowClick(e);
-    this._drawn = null;
+    this.refreshView();
+  }
+
+  // ricalcola le righe visibili (filtro, ricerca, ordine) senza perdere la posizione di scorrimento
+  refreshView() {
+    const el = this.shadowRoot.getElementById("list");
+    if (!el.querySelector("#vp")) { this.renderList(); return; }
+    const k = (r) => this.sortKey(r);
+    this.view = [...this.rows.values()].filter((r) => this.match(r))
+      .sort((a, b) => { const x = k(a), y = k(b); return (x < y ? -1 : x > y ? 1 : 0) * (this.s.desc ? -1 : 1); });
+    const all = el.querySelector("#all");
+    all.checked = !!this.view.length && this.view.every((r) => this.sel.has(r.file.path));
+    const sc = this.s.scan || {};
+    el.querySelector("#scanbar").innerHTML = !sc.done
+      ? `<div class="scan"><span class="spin"></span><span>Leggo… <b>${sc.count}</b> brani in ${sc.folders} cartelle${sc.dir && sc.dir !== "." ? ` · ora: ${esc(sc.dir)}` : ""}</span><button id="sstop">Ferma</button></div>`
+      : sc.error ? `<div class="warn">${esc(sc.error)}</div>`
+      : this.s.list.truncated ? `<div class="warn">Troppi brani: letti i primi ${sc.count}. Apri una sottocartella.</div>`
+      : sc.stopped ? `<div class="warn">Lettura fermata: ${sc.count} brani letti. <button id="sagain">Rileggi</button></div>` : "";
+    el.querySelector("#sstop")?.addEventListener("click", () => this.stopScan());
+    el.querySelector("#sagain")?.addEventListener("click", () => this.openDir(this.s.path));
+    const files = this.rows.size;
+    el.querySelector("#lnote").innerHTML = sc.done && !sc.error && !files
+      ? `<div class="note">Nessun brano in questa cartella${this.s.recursive ? "" : " (attiva «Sottocartelle» per vedere anche quelli dentro)"}.</div>`
+      : files && !this.view.length ? `<div class="note">Nessun brano con questo filtro.</div>` : "";
     this.paint();
     this.updateCount();
   }
@@ -439,6 +486,8 @@ class LdmhaPanel extends HTMLElement {
       h += `<div class="lab">Tag nuovi</div><div class="ed">${FIELDS.map(([k, lab]) => `<label class="f-${k}">${lab}<input data-k="${k}" value="${esc(r.edit[k] || "")}"></label>`).join("")}</div>
         <div class="nn">${this.s.pattern ? (r.newName ? `Nome nuovo: <code>${esc(r.newName)}</code>` : r.nameErr ? `<span class="ko">${esc(r.nameErr)}</span>` : "") : "Solo i tag (nessuno schema per il nome)"}</div>`;
     }
+    if (r.log?.length) h += `<details class="dlog" ${r.status === "nontrovato" || r.status === "errore" ? "open" : ""}><summary>Cosa ha fatto (${r.log.length} passaggi)</summary>
+      <ol>${r.log.map((l) => `<li>${esc(l)}</li>`).join("")}</ol></details>`;
     if (r.searching) h += `<div class="srch"><input id="sq" placeholder="Artista - Titolo, o testo libero" value="${esc(r.q || "")}"><button id="sgo">Cerca</button></div>`;
     h += `<div class="dacts">${closed
       ? (r.entry ? `<button data-a="undo">Annulla la modifica</button>` : "")
@@ -493,13 +542,18 @@ class LdmhaPanel extends HTMLElement {
     r.status = "lavoro"; r.err = ""; r.note = "";
     this.touch(r);
     try {
+      this.log("Riconoscimento avviato", r.file.path, "run");
       const res = await this.ws({ type: "ldmha/identify", path: r.file.path });
       r.cands = res.candidates || [];
       r.note = res.note || "";
+      r.log = res.log || [];
+      for (const line of r.log) this.log(line, r.file.path);
       r.status = r.cands.length ? "trovato" : "nontrovato";
       if (r.cands.length) this.choose(r, r.cands[0]); else r.edit = null;
     } catch (e) {
       r.status = "errore"; r.err = e.message || String(e);
+      r.log = [...(r.log || []), `Errore: ${r.err}`];
+      this.log(`Errore: ${r.err}`, r.file.path, "ko");
     }
     this.touch(r);
   }
@@ -521,7 +575,7 @@ class LdmhaPanel extends HTMLElement {
     await Promise.all(Array.from({ length: WORKERS }, work));
     this.s.running = false;
     this.renderTop();
-    if (["dafare", "proposte", "sicuri", "incerti", "nontrovati", "doppioni"].includes(this.s.filter)) this.renderList();
+    if (this.s.filter !== "tutti") this.refreshView();
   }
 
   async search(r, text) {
@@ -537,8 +591,9 @@ class LdmhaPanel extends HTMLElement {
       r.searching = false;
       r.note = r.cands.length ? "" : "Nessun risultato su MusicBrainz";
       r.status = r.cands.length ? "trovato" : "nontrovato";
+      this.log(`Ricerca «${text}» su MusicBrainz: ${r.cands.length} risultati`, r.file.path);
       if (r.cands.length) this.choose(r, r.cands[0]);
-    } catch (e) { r.status = "errore"; r.err = e.message || String(e); }
+    } catch (e) { r.status = "errore"; r.err = e.message || String(e); this.log(`Ricerca non riuscita: ${r.err}`, r.file.path, "ko"); }
     this.touch(r);
   }
 
@@ -587,10 +642,12 @@ class LdmhaPanel extends HTMLElement {
     this.touch(r);
     try {
       const res = await this.ws({ type: "ldmha/apply", path: r.file.path, tags: r.edit, pattern: this.s.pattern });
+      const old = r.file.path;
       this.move(r, res.path);
       r.file.tags = res.tags;
       r.entry = res.entry; r.status = "fatto";
-    } catch (e) { r.status = "trovato"; r.err = e.message || String(e); }
+      this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}`, old, "ok");
+    } catch (e) { r.status = "trovato"; r.err = e.message || String(e); this.log(`Applica non riuscito: ${r.err}`, r.file.path, "ko"); }
     this.touch(r);
   }
 
@@ -615,8 +672,9 @@ class LdmhaPanel extends HTMLElement {
       try {
         const res = await this.ws({ type: "ldmha/trash", path: r.file.path });
         r.entry = res.entry; r.status = "cestino"; r.err = "";
+        this.log("Spostato nel cestino", r.file.path, "ok");
         this.sel.delete(r.file.path);
-      } catch (e) { r.err = e.message || String(e); }
+      } catch (e) { r.err = e.message || String(e); this.log(`Cestino non riuscito: ${r.err}`, r.file.path, "ko"); }
       this.touch(r);
     }
     this.markDups();
@@ -630,6 +688,7 @@ class LdmhaPanel extends HTMLElement {
       if (r.entry.kind === "apply") r.file.tags = { ...(r.entry.old_tags || {}), _length: r.file.tags?._length };
       this.move(r, res.path);
       r.entry = null; r.status = r.cands?.length ? "trovato" : "nuovo"; r.err = "";
+      this.log("Modifica annullata", res.path, "ok");
       this.markDups();
       this.preview([r]);
     } catch (e) { r.err = e.message || String(e); }
@@ -646,6 +705,22 @@ class LdmhaPanel extends HTMLElement {
       if (seen.has(id)) r.dup = seen.get(id).file.name; else seen.set(id, r);
     }
     this.touch();
+  }
+
+  // ================================================================ registro
+  log(text, file = "", kind = "") {
+    this.logs.unshift({ t: new Date(), text, file, kind });
+    if (this.logs.length > 1000) this.logs.length = 1000;
+    if (this.s.tab === "registro") { clearTimeout(this._lt); this._lt = setTimeout(() => this.renderLog(), 200); }
+  }
+
+  renderLog() {
+    const el = this.shadowRoot.getElementById("logv");
+    el.innerHTML = `<div class="bar"><span class="hint grow" style="text-align:left">Cosa ha fatto LDMHA in questa sessione (il più recente in cima). Con il pannello chiuso il registro si azzera; le modifiche ai file restano nella Cronologia.</span>
+      <button id="lclear">Svuota</button></div>
+      ${this.logs.length ? `<div class="lg">${this.logs.map((l) => `<div class="lr ${l.kind}"><span class="mut">${l.t.toLocaleTimeString()}</span>
+        <span>${l.file ? `<b>${esc(base(l.file))}</b> ` : ""}${esc(l.text)}</span></div>`).join("")}</div>` : `<div class="note">Ancora niente.</div>`}`;
+    el.querySelector("#lclear").onclick = () => { this.logs = []; this.renderLog(); };
   }
 
   // ================================================================ cronologia
@@ -745,7 +820,16 @@ progress { width: 120px; }
 .ko { color: var(--error-color, #c62828); }
 .srch { display: flex; gap: 6px; margin-top: 8px; } .srch input { flex: 1; }
 .dacts { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px; }
-#hist { flex: 1; overflow: auto; padding: 10px; }
+#hist, #logv { flex: 1; overflow: auto; padding: 10px; }
+.lg { display: flex; flex-direction: column; font-family: monospace; font-size: 12px; }
+.lr { display: grid; grid-template-columns: 80px 1fr; gap: 8px; padding: 3px 4px; border-bottom: 1px solid var(--divider-color); }
+.lr.ko { color: var(--error-color, #c62828); } .lr.ok { color: #2e7d32; } .lr.run { color: #1976d2; }
+.dlog { margin-top: 10px; font-size: 12px; } .dlog summary { cursor: pointer; font-weight: 600; }
+.dlog ol { margin: 6px 0; padding-left: 20px; } .dlog li { margin: 2px 0; }
+.scan { display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: rgba(3,169,244,.12); border-radius: 6px; margin: 4px 6px; }
+.scan span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spin { width: 14px; height: 14px; border: 2px solid rgba(3,169,244,.3); border-top-color: var(--primary-color); border-radius: 50%; animation: sp .8s linear infinite; flex: none; }
+@keyframes sp { to { transform: rotate(360deg); } }
 .ht { display: flex; flex-direction: column; }
 .hr { display: grid; grid-template-columns: 150px 24px 1fr auto; gap: 8px; align-items: center; padding: 5px 4px; border-bottom: 1px solid var(--divider-color); }
 .hr.dim { opacity: .55; }
