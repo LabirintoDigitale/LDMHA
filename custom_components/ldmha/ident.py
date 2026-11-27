@@ -259,7 +259,7 @@ class Identifier:
             if k not in keys:
                 keys.add(k)
                 uniq.append(c)
-        return duration, uniq[:8]
+        return uniq[:8]
 
     async def by_text(self, artist: str, title: str, query: str = "", hints: list[str] | None = None) -> list[dict[str, Any]]:
         weak = False
