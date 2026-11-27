@@ -1,0 +1,23 @@
+name: Validate
+
+on:
+  push:
+    branches-ignore: [apk]   # il ramo apk contiene solo l'APK di MusikHa, non l'integrazione
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # la licenza PolyForm Strict non è tra quelle che GitHub riconosce: HACS la segnalerebbe come errore
+          ignore: brands license

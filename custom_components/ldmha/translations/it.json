@@ -1,0 +1,43 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "LDMHA",
+        "description": "LDMHA aggiunge alla barra laterale (solo per gli amministratori) un pannello per mettere in ordine la musica: riconosce i brani dall'audio (AcoustID + MusicBrainz), corregge i tag, rinomina i file e toglie i doppioni.\n\nLa chiave AcoustID è gratuita: si crea su https://acoustid.org/new-application (senza chiave i brani si cercano solo per nome e tag).",
+        "data": {
+          "acoustid_key": "Chiave AcoustID (applicazione)",
+          "roots": "Cartelle della musica (separate da virgola)"
+        },
+        "data_description": {
+          "roots": "Per esempio /media, /media/nas_musica. Le condivisioni di rete si montano in Impostazioni → Sistema → Archiviazione (uso \"Media\") e compaiono sotto /media."
+        }
+      }
+    },
+    "error": {
+      "invalid_roots": "Indica cartelle con il percorso completo (es. /media)",
+      "no_roots": "Nessuna di queste cartelle esiste"
+    },
+    "abort": {
+      "single_instance_allowed": "LDMHA è già configurato."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "LDMHA",
+        "description": "Chiave AcoustID (gratuita, da https://acoustid.org/new-application) e cartelle in cui LDMHA può leggere e rinominare i brani.",
+        "data": {
+          "acoustid_key": "Chiave AcoustID (applicazione)",
+          "roots": "Cartelle della musica (separate da virgola)"
+        },
+        "data_description": {
+          "roots": "Per esempio /media, /media/nas_musica."
+        }
+      }
+    },
+    "error": {
+      "invalid_roots": "Indica cartelle con il percorso completo (es. /media)",
+      "no_roots": "Nessuna di queste cartelle esiste"
+    }
+  }
+}
