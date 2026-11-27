@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.8.0";
+const PANEL_VERSION = "0.8.1";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -148,11 +148,10 @@ class LdmhaPanel extends HTMLElement {
       </div>
       <div class="bar acts">
         ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>`
-          : `<button id="idall" class="pri" title="Riconosce i brani dell'elenco non ancora riconosciuti">Riconosci tutti</button>`}
+          : `<button id="idall" class="pri" ${n ? "" : "disabled"} title="Riconosce i brani selezionati non ancora riconosciuti (se lo sono già tutti, chiede se rifarli)">Riconosci selezionati${n ? ` (${n})` : ""}</button>`}
         <button id="safe" ${run ? `disabled title="Aspetta che finisca (o premi Ferma)"` : `title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}"`}>Applica i sicuri</button>
         <span class="sep"></span>
         <span class="hint">${n ? `<b>${n}</b> selezionati:` : "Selezione:"}</span>
-        <button id="sid" ${n && !run ? "" : "disabled"}>Riconosci</button>
         <button id="sap" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Applica</button>
         <button id="str" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Cestino</button>
         <button id="snone" ${n && !run ? "" : "disabled"} ${run ? 'title="Aspetta che finisca (o premi Ferma)"' : ""}>Deseleziona</button>
@@ -173,9 +172,16 @@ class LdmhaPanel extends HTMLElement {
       if (this.s.job) this.ws({ type: "ldmha/job_stop" }).catch(() => {}); // riconoscimento dentro Home Assistant
       else this.s.running = false;
     };
-    else $("idall").onclick = () => this.identifyMany(this.view.filter((r) => r.status === "nuovo"));
+    else $("idall").onclick = () => {
+      const sel = this.selected().filter((r) => r.status !== "fatto" && r.status !== "cestino");
+      let todo = sel.filter((r) => ["nuovo", "errore", "nontrovato"].includes(r.status));
+      if (!todo.length && sel.length) {
+        if (!confirm(`I ${sel.length} brani selezionati sono già riconosciuti. Rifare il riconoscimento?`)) return;
+        todo = sel;
+      }
+      this.identifyMany(todo);
+    };
     $("safe").onclick = () => this.applySafe();
-    $("sid").onclick = () => this.identifyMany(this.selected().filter((r) => r.status !== "fatto" && r.status !== "cestino"));
     $("sap").onclick = () => this.applyMany(this.selected().filter((r) => r.edit && r.status !== "fatto" && r.status !== "cestino"));
     $("str").onclick = () => this.trashMany(this.selected().filter((r) => r.status !== "cestino"));
     $("fixcov").onclick = () => this.fixCovers();
