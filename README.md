@@ -62,7 +62,7 @@ Music Assistant continua a usare il suo provider SMB: sono gli stessi file, vede
 
 <img src="docs/musikha.png" alt="MusikHa" width="96" align="right">
 
-Il **lettore di Music Assistant a tutto schermo**, collegato a Home Assistant: copertina, play/pausa, stop, avanti, playlist e radio, elenco dei brani, casuale / in ordine, volume. Nessuna barra, avviso o logo di Home Assistant.
+Il **lettore di Music Assistant a tutto schermo**, collegato a Home Assistant: copertina, play/pausa, stop, avanti, playlist e radio, elenco dei brani, casuale / in ordine, volume.
 
 **[⬇ Scarica MusikHa.apk](https://github.com/LabirintoDigitale/LDMHA/raw/apk/MusikHa.apk)**
 
