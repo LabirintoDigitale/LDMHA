@@ -31,6 +31,9 @@ from .db import Db
 from .fpcalc import Fpcalc
 from .ident import Identifier
 from .library import Library
+from .players import Players, StreamProxyView
+
+PLATFORMS = ["media_player"]
 
 
 @dataclass
@@ -38,6 +41,7 @@ class LdmhaData:
     library: Library
     fpcalc: Fpcalc
     identifier: Identifier
+    players: Players
 
 
 type LdmhaConfigEntry = ConfigEntry[LdmhaData]
@@ -50,7 +54,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     library = Library(hass, parse_roots(opts.get(CONF_ROOTS) or DEFAULT_ROOTS), db)
     await library.async_load()
     fp = Fpcalc(hass)
-    entry.runtime_data = LdmhaData(library, fp, Identifier(hass, fp, opts.get(CONF_ACOUSTID_KEY, "")))
+    players = Players(hass, entry.entry_id)  # lettori MusikHa (musica sul telefono)
+    await players.async_load()
+    entry.runtime_data = LdmhaData(library, fp, Identifier(hass, fp, opts.get(CONF_ACOUSTID_KEY, "")), players)
     hass.data[DOMAIN] = entry
 
     # "servizio" nella scheda dell'integrazione: mostra la versione installata
@@ -69,6 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
         await hass.http.async_register_static_paths(
             [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "frontend"), False)]
         )
+        hass.http.register_view(StreamProxyView())  # audio per i lettori MusikHa
         hass.data[DATA_STATIC_REGISTERED] = True
 
     await panel_custom.async_register_panel(
@@ -83,6 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
         config={},
     )
     ws_api.async_setup(hass)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
 
@@ -92,6 +100,18 @@ async def _async_reload(hass: HomeAssistant, entry: LdmhaConfigEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> bool:
+    ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     frontend.async_remove_panel(hass, PANEL_URL)
     hass.data.pop(DOMAIN, None)
-    return True
+    return ok
+
+
+async def async_remove_config_entry_device(hass: HomeAssistant, entry: LdmhaConfigEntry, device) -> bool:
+    """Un lettore MusikHa (telefono) si può eliminare da Home Assistant: se il telefono si ricollega torna."""
+    for dom, ident in device.identifiers:
+        if dom == DOMAIN and ident.startswith("player_"):
+            pid = ident[7:]
+            await entry.runtime_data.players.forget(pid)
+            entry.runtime_data.players.entities.pop(pid, None)
+            return True
+    return False

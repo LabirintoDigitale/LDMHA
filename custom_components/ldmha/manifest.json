@@ -1,6 +1,9 @@
 {
   "domain": "ldmha",
   "name": "LDMHA",
+  "after_dependencies": [
+    "media_source"
+  ],
   "codeowners": [
     "@LabirintoDigitale"
   ],
@@ -17,5 +20,5 @@
   "issue_tracker": "https://github.com/LabirintoDigitale/LDMHA/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.4.2"
+  "version": "0.5.0"
 }

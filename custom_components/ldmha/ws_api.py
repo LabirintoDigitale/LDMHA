@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_info, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -46,6 +46,67 @@ async def _run(connection, msg_id: int, coro) -> None:
         connection.send_error(msg_id, "ldmha_error", str(err))
 
 
+# ---------------------------------------------------------------- lettori MusikHa (app sul telefono)
+# Eccezione voluta (decisa dal proprietario): questi tre comandi NON sono solo per gli amministratori, perché l'app
+# MusikHa può collegarsi con un utente qualsiasi. Fanno solo da lettore (registra sé stessa, riceve i comandi, manda
+# lo stato) e non toccano i file della musica. Tutti gli altri comandi restano solo per gli admin.
+_PID = vol.All(str, vol.Match(r"^[a-z0-9_]{6,40}$"))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/player_register",
+    vol.Required("player_id"): _PID,
+    vol.Required("name"): vol.All(str, vol.Length(min=1, max=60)),
+})
+@websocket_api.async_response
+async def ws_player_register(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    try:
+        await _data(hass).players.register(msg["player_id"], msg["name"].strip())
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/player_subscribe", vol.Required("player_id"): _PID})
+@callback
+def ws_player_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """L'app resta in ascolto dei comandi per il suo lettore (play con l'indirizzo, pausa, stop, volume)."""
+    try:
+        players = _data(hass).players
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    mid = msg["id"]
+
+    @callback
+    def send(cmd: dict) -> None:
+        connection.send_message(websocket_api.event_message(mid, cmd))
+
+    connection.subscriptions[mid] = players.subscribe(msg["player_id"], send)
+    connection.send_result(mid)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/player_state",
+    vol.Required("player_id"): _PID,
+    vol.Optional("state"): vol.In(["idle", "buffering", "playing", "paused"]),
+    vol.Optional("volume"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1)),
+    vol.Optional("position"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+    vol.Optional("duration"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+})
+@callback
+def ws_player_state(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    st = {k: msg[k] for k in ("state", "volume", "position", "duration") if k in msg}
+    try:
+        _data(hass).players.set_state(msg["player_id"], st)
+    except LibraryError as err:
+        connection.send_error(msg["id"], "ldmha_error", str(err))
+        return
+    connection.send_result(msg["id"])
+
+
+# ---------------------------------------------------------------- pannello (solo amministratori)
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): "ldmha/info"})
 @websocket_api.async_response

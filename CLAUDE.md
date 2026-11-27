@@ -6,3 +6,5 @@
 - Testi, commenti e messaggi di commit in italiano, come il resto del codice.
 - Servizi esterni: AcoustID (chiave gratuita dell'utente, massimo 3 richieste/s) e MusicBrainz (senza chiave, User-Agent che identifica LDMHA, massimo 1 richiesta/s). Rispettane i limiti.
 - Il pannello è solo per gli amministratori (`require_admin=True` e `@websocket_api.require_admin` su ogni comando): LDMHA rinomina e sposta file, deve restare così. Si lavora solo dentro le cartelle configurate (`Library.check`).
+- Unica eccezione, decisa dal proprietario: i comandi del lettore sul telefono (`ldmha/player_register`, `ldmha/player_subscribe`, `ldmha/player_state`) sono aperti a tutti gli utenti, perché l'app MusikHa può accedere con un utente non amministratore. Non devono mai toccare i file della musica; ogni altro comando nuovo resta solo per gli admin.
+- LDMHA fornisce anche i lettori MusikHa (`players.py`, `media_player.py`): ogni telefono è un dispositivo con il suo nome, l'audio passa dal ponte `/api/ldmha/stream/<codice>`. MusikHa non dipende da Navigator.
