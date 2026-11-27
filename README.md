@@ -20,14 +20,16 @@ Un pannello nella barra laterale di Home Assistant, **visibile solo agli amminis
 - **Copertine**: nella scheda del brano vedi quella già nel file e quella proposta (dalla Cover Art Archive di MusicBrainz o da Shazam). Con *Applica* la copertina va nel file: solo se manca (predefinito), sempre, o mai. MP3, FLAC, M4A, OGG e Opus; annullando torna quella di prima.
 - **Tag e nome nuovo**: scegli fra le proposte, correggi i campi se serve e premi *Applica*: scrive i tag (titolo, artista, album, artista dell'album, anno, numero, ID MusicBrainz) e rinomina il file con lo schema che vuoi, per esempio `{artist} - {title}` oppure `{artist}/{album}/{track} - {title}` (con le sottocartelle).
 - **Tutti insieme**: *Riconosci tutti* passa la cartella (anche con le sottocartelle), *Applica i sicuri* sistema i brani riconosciuti dall'audio con sicurezza almeno del 90%.
-- **Doppioni**: lo stesso brano in più file viene segnalato; *Cestino* lo sposta in `.ldmha_cestino` dentro la cartella della musica (niente viene cancellato).
+- **Proposte giuste prima**: AcoustID spesso collega la stessa impronta a più brani dello stesso artista; LDMHA mette prima quella che somiglia al titolo e all'artista già nel file e con la durata giusta, e abbassa la sicurezza delle altre.
+- **Ascolto**: ▶ su ogni riga (o il lettore in cima alla scheda) per sentire il brano nel browser.
+- **Doppioni**: lo stesso brano (stessa registrazione MusicBrainz) in più file viene segnalato, per esempio copiato due volte o presente sia nell'album sia in una raccolta; *Cestino* lo sposta in `.ldmha_cestino` dentro la cartella della musica (niente viene cancellato).
 - **Si può sempre tornare indietro**: ogni modifica (tag, nome, cestino) resta nella *Cronologia* e si annulla con un tocco.
 - **Registro**: per ogni brano si vede cosa ha fatto (impronta, risposta di AcoustID con la sicurezza, ricerca su MusicBrainz, tempi); la scheda *Registro* raccoglie tutto.
 
 ### Fatto per librerie grandi
 
-- **Albero delle cartelle** a sinistra, **tabella compatta** a destra che disegna solo le righe visibili: migliaia di brani restano fluidi.
-- Colonne ordinabili, **ricerca** e **filtri** (da riconoscere, sicuri, incerti, doppioni, non trovati, sistemati, cestino).
+- **Albero delle cartelle** a sinistra (con le caselle se ne scelgono più d'una insieme), **tabella compatta** a destra che disegna solo le righe visibili: migliaia di brani restano fluidi.
+- Colonne ordinabili, **ricerca** e **filtri** (da sistemare, il predefinito, che nasconde i brani già sistemati; da riconoscere, sicuri, incerti, doppioni, non trovati, sistemati, cestino).
 - **Selezione multipla** (Maiusc per un intervallo) con Riconosci, Applica e Cestino sui selezionati.
 - **Scheda del brano**: proposte, tag da correggere e nome nuovo; ↑ ↓ per passare al brano vicino, **Invio** applica e va al successivo.
 - **Lettura a blocchi**: con le sottocartelle i brani compaiono man mano, con quante cartelle sono state lette; si può fermare.

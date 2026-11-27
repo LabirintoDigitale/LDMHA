@@ -32,6 +32,7 @@ from .db import Db
 from .fpcalc import Fpcalc
 from .ident import Identifier
 from .library import Library
+from .audio import AudioView
 from .players import Players, StreamProxyView
 from .shazam import ShazamRecognizer
 
@@ -79,6 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
             [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "frontend"), False)]
         )
         hass.http.register_view(StreamProxyView())  # audio per i lettori MusikHa
+        hass.http.register_view(AudioView())  # ascolto dal pannello
         hass.data[DATA_STATIC_REGISTERED] = True
 
     await panel_custom.async_register_panel(

@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.6.7";
+const PANEL_VERSION = "0.7.0";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -19,15 +19,15 @@ const PATTERNS = [
 ];
 const FIELDS = [["title", "Titolo"], ["artist", "Artista"], ["album", "Album"], ["albumartist", "Artista album"],
   ["date", "Anno"], ["tracknumber", "N."]];
-const FILTERS = [["tutti", "Tutti"], ["dafare", "Da riconoscere"], ["proposte", "Con proposta"], ["sicuri", `Sicuri (≥ ${Math.round(SAFE * 100)}%)`],
+const FILTERS = [["aperti", "Da sistemare"], ["tutti", "Tutti (anche sistemati)"], ["dafare", "Da riconoscere"], ["proposte", "Con proposta"], ["sicuri", `Sicuri (≥ ${Math.round(SAFE * 100)}%)`],
   ["incerti", "Incerti"], ["doppioni", "Doppioni"], ["nontrovati", "Non trovati / errori"], ["fatti", "Sistemati"], ["cestino", "Nel cestino"]];
-const COLS = [["st", "", "38px"], ["name", "File", "minmax(180px,3fr)"], ["cur", "Tag attuali", "minmax(140px,2.2fr)"],
+const COLS = [["st", "", "62px"], ["name", "File", "minmax(180px,3fr)"], ["cur", "Tag attuali", "minmax(140px,2.2fr)"],
   ["prop", "Proposta", "minmax(140px,2.4fr)"], ["score", "%", "48px"], ["len", "Durata", "56px"]];
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const size = (b) => b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.round(b / 1024)} kB`;
 const pct = (s) => `${Math.round((s || 0) * 100)}%`;
-const dur = (t) => t ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}` : "";
+const dur = (t) => { t = Math.round(+t || 0); return t ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}` : ""; };
 const load = () => { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch (e) { return {}; } };
 const save = (o) => { try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...load(), ...o })); } catch (e) { /* niente */ } };
 const base = (p) => p.split("/").pop();
@@ -38,8 +38,8 @@ class LdmhaPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     const st = load();
     this.s = {
-      tab: "brani", info: null, path: st.path || "", recursive: !!st.recursive, pattern: st.pattern ?? PATTERNS[0][0],
-      filter: "tutti", q: "", sort: st.sort || "name", desc: !!st.desc, list: null, loading: false, running: false,
+      tab: "brani", info: null, path: st.path || "", paths: Array.isArray(st.paths) && st.paths.length ? st.paths : (st.path ? [st.path] : []), recursive: !!st.recursive, pattern: st.pattern ?? PATTERNS[0][0],
+      filter: "aperti", q: "", sort: st.sort || "name", desc: !!st.desc, list: null, loading: false, running: false,
       done: 0, total: 0, open: null,
       // sul telefono l'albero parte chiuso (copre l'elenco); sullo schermo grande come lo si è lasciato
       tree: window.innerWidth > 900 && (st.tree ?? true),
@@ -66,12 +66,15 @@ class LdmhaPanel extends HTMLElement {
     this.renderShell();
     try { this.s.info = await this.ws({ type: "ldmha/info" }); } catch (e) { this.s.err = e.message || String(e); }
     const roots = this.s.info?.roots || [];
-    if (!roots.some((r) => this.s.path === r || this.s.path.startsWith(r + "/"))) this.s.path = roots[0] || "";
+    const ok = (p) => roots.some((r) => p === r || p.startsWith(r + "/"));
+    this.s.paths = this.s.paths.filter(ok);
+    if (!this.s.paths.length) this.s.paths = roots[0] ? [roots[0]] : [];
+    this.s.path = this.s.paths[0] || "";
     for (const r of roots) this.nodes.set(r, { dirs: null, open: false });
     this.renderTop();
-    if (this.s.path) {
-      await this.expandTo(this.s.path);
-      this.openDir(this.s.path);
+    if (this.s.paths.length) {
+      for (const p of this.s.paths) await this.expandTo(p);
+      this.openPaths(this.s.paths);
     } else this.renderAll();
   }
 
@@ -81,7 +84,7 @@ class LdmhaPanel extends HTMLElement {
       <header><button class="menu" title="Menu" ${this._narrow ? "" : "hidden"}>☰</button><img class="logo" src="${ICON}" alt=""><h1>LDMHA <small class="ver">${PANEL_VERSION}</small></h1>
         <nav><button data-tab="brani" class="on">Brani</button><button data-tab="registro">Registro</button><button data-tab="cronologia">Cronologia</button></nav></header>
       <div id="top"></div>
-      <div id="main"><aside id="tree"></aside><section id="list"></section><section id="det" hidden></section></div>
+      <div id="main"><aside id="tree"></aside><section id="list"></section><section id="det" hidden><div id="dplay"><audio id="aud" controls preload="none"></audio></div><div id="dbody"></div></section></div>
       <div id="hist" hidden></div><div id="logv" hidden></div>`;
     const r = this.shadowRoot;
     r.querySelector(".menu").onclick = () => this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
@@ -150,8 +153,8 @@ class LdmhaPanel extends HTMLElement {
     const $ = (id) => top.querySelector("#" + id);
     $("treeb").onclick = () => { this.s.tree = !this.s.tree; save({ tree: this.s.tree }); this.renderTree(); };
     top.querySelectorAll("[data-go]").forEach((b) => { b.onclick = () => this.openDir(b.dataset.go); });
-    $("rec").onchange = (e) => { this.s.recursive = e.target.checked; save({ recursive: this.s.recursive }); this.openDir(this.s.path); };
-    $("reload").onclick = () => this.openDir(this.s.path, true);
+    $("rec").onchange = (e) => { this.s.recursive = e.target.checked; save({ recursive: this.s.recursive }); this.openPaths(this.s.paths); };
+    $("reload").onclick = () => this.openPaths(this.s.paths, true);
     $("q").oninput = (e) => { this.s.q = e.target.value; clearTimeout(this._qt); this._qt = setTimeout(() => this.refreshView(), 200); };
     $("filter").onchange = (e) => { this.s.filter = e.target.value; this.refreshView(); };
     $("pattern").onchange = (e) => this.setPattern(e.target.value);
@@ -168,6 +171,9 @@ class LdmhaPanel extends HTMLElement {
   }
 
   crumbs() {
+    if (this.s.paths.length > 1) {
+      return `<b>${this.s.paths.length} cartelle:</b>&nbsp;${this.s.paths.map((p) => `<button data-go="${esc(p)}" title="${esc(p)}">${esc(base(p))}</button>`).join(", ")}`;
+    }
     const i = this.s.info, p = this.s.path;
     const root = (i?.roots || []).filter((r) => p === r || p.startsWith(r + "/")).sort((a, b) => b.length - a.length)[0];
     if (!root) return "";
@@ -221,8 +227,10 @@ class LdmhaPanel extends HTMLElement {
     const item = (path, name, depth) => {
       const n = this.nodes.get(path) || {};
       const leaf = n.dirs && !n.dirs.length;
-      let h = `<div class="tn ${path === this.s.path ? "on" : ""}" style="padding-left:${4 + depth * 14}px">
+      const on = this.s.paths.includes(path);
+      let h = `<div class="tn ${on ? "on" : ""}" style="padding-left:${4 + depth * 14}px">
         <button class="tw" data-tw="${esc(path)}" ${leaf ? "disabled" : ""}>${leaf ? "" : n.open ? "▾" : "▸"}</button>
+        <input type="checkbox" class="tc" data-tc="${esc(path)}" ${on ? "checked" : ""} title="Aggiungi o togli questa cartella dall'elenco (più cartelle insieme)">
         <button class="tl" data-go="${esc(path)}" title="${esc(path)}">${esc(name)}</button></div>`;
       if (n.open && n.dirs) for (const d of n.dirs) h += item(path + "/" + d, d, depth + 1);
       return h;
@@ -236,6 +244,16 @@ class LdmhaPanel extends HTMLElement {
       };
     });
     el.querySelectorAll(".tl").forEach((b) => { b.onclick = () => { if (this._narrow) { this.s.tree = false; } this.openDir(b.dataset.go); }; });
+    // casella: più cartelle insieme (una dentro l'altra non serve: con «Sottocartelle» la più in alto le comprende)
+    el.querySelectorAll("[data-tc]").forEach((c) => {
+      c.onchange = () => {
+        const p = c.dataset.tc;
+        let ps = this.s.paths.filter((x) => x !== p);
+        if (c.checked) ps = [...ps.filter((x) => !x.startsWith(p + "/") && !p.startsWith(x + "/")), p];
+        if (!ps.length) { c.checked = true; return; } // almeno una cartella
+        this.openPaths(ps);
+      };
+    });
     el.querySelector(".tn.on")?.scrollIntoView({ block: "nearest" });
   }
 
@@ -243,50 +261,69 @@ class LdmhaPanel extends HTMLElement {
   // lettura della cartella a blocchi: i brani arrivano a gruppi e compaiono subito, con quante cartelle sono state
   // lette e dove si è arrivati; si può fermare (restano quelli già letti)
   // refresh: rilegge dal disco (aprendo solo i file cambiati) invece di usare l'elenco salvato nell'archivio
-  async openDir(path, refresh = false) {
+  async openDir(path, refresh = false) { return this.openPaths([path], refresh); }
+
+  // più cartelle: si leggono una dopo l'altra e i brani finiscono nello stesso elenco
+  async openPaths(paths, refresh = false) {
     this.s.running = false;
     this.stopScan();
-    this.s.path = path;
-    save({ path });
-    this.s.list = { path, dirs: [], files: 0, truncated: false };
-    this.s.scan = { count: 0, folders: 0, dir: "", done: false, t: Date.now() };
+    this.s.paths = [...paths];
+    this.s.path = paths[0];
+    save({ path: this.s.path, paths: this.s.paths });
+    const multi = paths.length > 1;
+    this.s.list = { path: multi ? "" : paths[0], dirs: [], files: 0, truncated: false };
+    this.s.scan = { count: 0, folders: 0, dir: "", done: false, t: Date.now(), cached: 0 };
     this.s.open = null;
     this.rows.clear();
     this.sel.clear();
-    const n = await this.loadNode(path);
-    n.open = true;
+    for (const p of paths) { const n = await this.loadNode(p); n.open = true; }
     this.renderAll();
     const scan = this.s.scan;
     let pending = false;
-    const onEvent = (ev) => {
-      if (scan !== this.s.scan) return; // lettura vecchia (nel frattempo si è aperta un'altra cartella)
-      if (ev.type === "start") { this.s.list.path = ev.path; this.s.list.dirs = ev.dirs; scan.cached = ev.cached || 0; }
-      else if (ev.type === "files") {
-        for (const f of ev.files) this.rows.set(f.path, this.restore(f));
-        scan.count = ev.count; scan.folders = ev.folders; scan.dir = ev.dir;
-      } else if (ev.type === "done") {
-        scan.done = true; scan.count = ev.count; scan.folders = ev.folders; this.s.list.truncated = ev.truncated;
-        const secs = ((Date.now() - scan.t) / 1000).toFixed(1);
-        this.log(ev.cached
-          ? `Cartella ${path}: ${ev.count} brani dall'archivio (letti dal disco il ${new Date(ev.cached * 1000).toLocaleString()}) in ${secs} s`
-          : `Letta la cartella ${path}: ${ev.count} brani in ${ev.folders} cartelle, ${ev.opened} file aperti (nuovi o cambiati)${ev.removed ? `, ${ev.removed} tolti dall'archivio perché non ci sono più` : ""} (${secs} s)`);
-        this.stopScan(false);
-        this.markDups();
-        this.preview([...this.rows.values()].filter((r) => r.edit && r.status === "trovato"));
-      } else if (ev.type === "error") {
-        scan.done = true; scan.error = ev.message;
-        this.log(`Errore leggendo ${path}: ${ev.message}`);
-        this.stopScan(false);
-      }
-      this.s.list.files = this.rows.size;
-      if (!pending) { pending = true; setTimeout(() => { pending = false; this.refreshView(); }, ev.type === "files" ? 400 : 0); }
-    };
-    try {
-      this._scanUnsub = await this._hass.connection.subscribeMessage(onEvent, { type: "ldmha/scan", path, recursive: this.s.recursive, refresh });
-    } catch (e) {
-      scan.done = true; scan.error = e.message || String(e);
-      this.refreshView();
+    const redraw = (now) => { if (!pending) { pending = true; setTimeout(() => { pending = false; this.refreshView(); }, now ? 0 : 400); } };
+    let before = 0, foldersBefore = 0;
+    for (const path of paths) {
+      if (scan !== this.s.scan) return;
+      const done = await new Promise((resolve) => {
+        const onEvent = (ev) => {
+          if (scan !== this.s.scan) { resolve(false); return; } // lettura vecchia (nel frattempo si è aperta un'altra cartella)
+          if (ev.type === "start") { if (!multi) { this.s.list.path = ev.path; this.s.list.dirs = ev.dirs; } scan.cached = scan.cached || ev.cached || 0; }
+          else if (ev.type === "files") {
+            for (const f of ev.files) {
+              if (multi) f.name = `${base(path)}/${f.name}`;
+              this.rows.set(f.path, this.restore(f));
+            }
+            scan.count = before + ev.count; scan.folders = foldersBefore + ev.folders; scan.dir = (multi ? base(path) + "/" : "") + (ev.dir || "");
+          } else if (ev.type === "done") {
+            const secs = ((Date.now() - scan.t) / 1000).toFixed(1);
+            this.log(ev.cached
+              ? `Cartella ${path}: ${ev.count} brani dall'archivio (letti dal disco il ${new Date(ev.cached * 1000).toLocaleString()}) in ${secs} s`
+              : `Letta la cartella ${path}: ${ev.count} brani in ${ev.folders} cartelle, ${ev.opened} file aperti (nuovi o cambiati)${ev.removed ? `, ${ev.removed} tolti dall'archivio perché non ci sono più` : ""} (${secs} s)`);
+            before += ev.count; foldersBefore += ev.folders;
+            if (ev.truncated) this.s.list.truncated = true;
+            this.stopScan(false);
+            resolve(true);
+          } else if (ev.type === "error") {
+            scan.error = `${path}: ${ev.message}`;
+            this.log(`Errore leggendo ${path}: ${ev.message}`);
+            this.stopScan(false);
+            resolve(true);
+          }
+          this.s.list.files = this.rows.size;
+          redraw(ev.type !== "files");
+        };
+        this._hass.connection.subscribeMessage(onEvent, { type: "ldmha/scan", path, recursive: this.s.recursive, refresh })
+          .then((u) => { this._scanUnsub = u; })
+          .catch((e) => { scan.error = e.message || String(e); resolve(true); });
+      });
+      if (!done) return;
     }
+    if (scan !== this.s.scan) return;
+    scan.done = true;
+    scan.count = this.rows.size;
+    this.markDups();
+    this.preview([...this.rows.values()].filter((r) => r.edit && r.status === "trovato"));
+    redraw(true);
   }
 
   // brano dall'archivio: tornano proposte, registro e "sistemato" dei riconoscimenti già fatti
@@ -317,6 +354,7 @@ class LdmhaPanel extends HTMLElement {
 
   match(r) {
     switch (this.s.filter) {
+      case "aperti": if (r.status === "fatto" || r.status === "cestino") return false; break;
       case "dafare": if (r.status !== "nuovo") return false; break;
       case "proposte": if (!(r.edit && r.status === "trovato")) return false; break;
       case "sicuri": if (!this.isSafe(r)) return false; break;
@@ -393,9 +431,9 @@ class LdmhaPanel extends HTMLElement {
       : sc.stopped ? `<div class="warn">Lettura fermata: ${sc.count} brani letti. <button id="sagain">Rileggi</button></div>`
       : sc.cached ? `<div class="cache">Elenco salvato, letto dal disco il <b>${new Date(sc.cached * 1000).toLocaleString()}</b>. Se nel frattempo hai aggiunto o cambiato brani:
           <button id="srefresh">⟳ Aggiorna dal disco</button> <span class="mut">(apre solo i file nuovi o cambiati)</span></div>` : "";
-    el.querySelector("#srefresh")?.addEventListener("click", () => this.openDir(this.s.path, true));
+    el.querySelector("#srefresh")?.addEventListener("click", () => this.openPaths(this.s.paths, true));
     el.querySelector("#sstop")?.addEventListener("click", () => this.stopScan());
-    el.querySelector("#sagain")?.addEventListener("click", () => this.openDir(this.s.path));
+    el.querySelector("#sagain")?.addEventListener("click", () => this.openPaths(this.s.paths));
     const files = this.rows.size;
     el.querySelector("#lnote").innerHTML = sc.done && !sc.error && !files
       ? `<div class="note">Nessun brano in questa cartella${this.s.recursive ? "" : " (attiva «Sottocartelle» per vedere anche quelli dentro)"}.</div>`
@@ -431,10 +469,10 @@ class LdmhaPanel extends HTMLElement {
     const tip = r.newName ? ` → ${r.newName}` : "";
     return `<div class="tr ${this.sel.has(p) ? "sel" : ""} ${this.s.open === p ? "open" : ""} ${r.status === "fatto" || r.status === "cestino" ? "dim" : ""}" data-i="${i}"
         style="top:${i * ROW}px;grid-template-columns:${grid}">
-      <span class="c-st"><input type="checkbox" data-c ${this.sel.has(p) ? "checked" : ""}><b class="st ${st[1]}" title="${esc(st[2])}">${st[0]}</b></span>
+      <span class="c-st"><input type="checkbox" data-c ${this.sel.has(p) ? "checked" : ""}><b class="st ${st[1]}" title="${esc(st[2])}">${st[0]}</b><button class="pl" data-play title="Ascolta">▶</button></span>
       <span title="${esc(f.name)}">${esc(f.name)}</span>
       <span class="${cur ? "" : "mut"}" title="${esc(cur)}">${esc(cur || "senza tag")}</span>
-      <span class="prop" title="${esc(prop + tip)}">${r.dup ? `<b class="dup" title="Stesso brano di: ${esc(r.dup)}">doppione</b> ` : ""}${esc(prop)}</span>
+      <span class="prop" title="${esc(prop + tip)}">${r.dup ? `<b class="dup" title="Doppione: la proposta è la stessa registrazione di «${esc(r.dup)}» (stesso codice MusicBrainz)">doppione</b> ` : ""}${esc(prop)}</span>
       <span class="num">${r.cand ? pct(r.cand.score) : ""}</span>
       <span class="num">${dur(+t._length)}</span></div>`;
   }
@@ -445,6 +483,7 @@ class LdmhaPanel extends HTMLElement {
     const r = this.view[+tr.dataset.i];
     if (!r) return;
     const p = r.file.path;
+    if (e.target.matches("[data-play]")) { this.openRow(r); this.setAudio(r, true); return; }
     if (e.target.matches("[data-c]")) {
       // con Maiusc si seleziona tutto l'intervallo dall'ultima casella toccata
       const i = +tr.dataset.i;
@@ -496,9 +535,11 @@ class LdmhaPanel extends HTMLElement {
 
   // ================================================================ scheda del brano
   renderDetail() {
-    const el = this.shadowRoot.getElementById("det");
+    const det = this.shadowRoot.getElementById("det");
+    const el = this.shadowRoot.getElementById("dbody");
     const r = this.s.open && this.rows.get(this.s.open);
-    el.hidden = !r;
+    det.hidden = !r;
+    this.setAudio(r);
     if (!r) return;
     const f = r.file, t = f.tags || {};
     const closed = r.status === "fatto" || r.status === "cestino";
@@ -518,14 +559,14 @@ class LdmhaPanel extends HTMLElement {
       <figure><div class="cv">${fc ? `<img src="${fc}" alt="">` : r.fileCover === undefined ? `<span class="mut small">…</span>` : `<span class="mut small">nessuna</span>`}</div><figcaption>nel file</figcaption></figure>
       ${closed ? "" : `<figure><div class="cv">${pc ? `<img src="${esc(pc)}" alt="" data-pc>` : `<span class="mut small">${r.cand ? "non trovata" : "—"}</span>`}</div><figcaption>proposta</figcaption></figure>`}
       ${closed || !r.cand ? "" : `<div class="mut small cvnote">${pc ? will : "La proposta scelta non ha una copertina."}</div>`}</div>`;
-    if (r.dup) h += `<div class="warn small">Stesso brano di «${esc(r.dup)}»: puoi spostarlo nel cestino.</div>`;
+    if (r.dup) h += `<div class="warn small"><b>Doppione</b>: la proposta è la stessa registrazione (stesso codice MusicBrainz) di «${esc(r.dup)}», che è anche nell'elenco. Spesso è lo stesso brano copiato due volte, oppure presente sia nell'album sia in una raccolta: se non ti serve due volte, puoi spostarne uno nel cestino. Se la proposta è sbagliata, il doppione non vale.</div>`;
     if (r.note) h += `<div class="mut small">${esc(r.note)}</div>`;
     if (r.err) h += `<div class="warn small">${esc(r.err)}</div>`;
     if (r.cands?.length && !closed) {
       h += `<div class="lab">Proposte</div><div class="cands">${r.cands.map((c, i) => `<button data-cand="${i}" class="${c === r.cand ? "on" : ""}">
         <span class="sc ${c.source === "impronta" && c.score >= SAFE ? "ok" : ""}">${pct(c.score)}</span>
         ${c.cover ? `<img class="thumb" src="${esc(c.cover)}" alt="" loading="lazy">` : `<span class="thumb"></span>`}
-        <span><b>${esc(c.artist)} — ${esc(c.title)}</b><br><small>${esc([c.album, c.year].filter(Boolean).join(", "))}${{ impronta: " · audio", shazam: " · Shazam" }[c.source] || " · nome"}${c.duration ? " · " + dur(c.duration) : ""}</small></span></button>`).join("")}</div>`;
+        <span><b>${esc(c.artist)} — ${esc(c.title)}</b><br><small>${esc([c.album, c.year].filter(Boolean).join(", "))}${{ impronta: " · audio", shazam: " · Shazam" }[c.source] || " · nome"}${c.duration ? " · " + dur(c.duration) : ""}${c.why ? ` · <span class="ko">${esc(c.why)}</span>` : ""}</small></span></button>`).join("")}</div>`;
     }
     if (r.edit && !closed) {
       h += `<div class="lab">Tag nuovi</div><div class="ed">${FIELDS.map(([k, lab]) => `<label class="f-${k}">${lab}<input data-k="${k}" value="${esc(r.edit[k] || "")}"></label>`).join("")}</div>
@@ -559,6 +600,25 @@ class LdmhaPanel extends HTMLElement {
       q.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.stopPropagation(); go(); } });
       requestAnimationFrame(() => q.focus());
     }
+  }
+
+  // ================================================================ ascolto nel browser
+  // il lettore resta lo stesso mentre la scheda si aggiorna; cambia brano solo aprendo un altro brano
+  async setAudio(r, play = false) {
+    const a = this.shadowRoot.getElementById("aud");
+    if (!a) return;
+    if (!r) { if (!a.paused) a.pause(); a.removeAttribute("src"); a.dataset.p = ""; return; }
+    if (a.dataset.p !== r.file.path) {
+      a.pause();
+      a.dataset.p = r.file.path;
+      a.removeAttribute("src");
+      try {
+        const res = await this.ws({ type: "ldmha/audio", path: r.file.path });
+        if (a.dataset.p !== r.file.path) return; // nel frattempo si è aperto un altro brano
+        a.src = res.url;
+      } catch (e) { this.log(`Ascolto non disponibile: ${e.message || e}`, r.file.path, "ko"); return; }
+    }
+    if (play) a.play().catch(() => {});
   }
 
   // ================================================================ azioni
@@ -628,7 +688,7 @@ class LdmhaPanel extends HTMLElement {
     await Promise.all(Array.from({ length: WORKERS }, work));
     this.s.running = false;
     this.renderTop();
-    if (this.s.filter !== "tutti") this.refreshView();
+    if (!["tutti", "aperti"].includes(this.s.filter)) this.refreshView();
   }
 
   async search(r, text) {
@@ -676,7 +736,12 @@ class LdmhaPanel extends HTMLElement {
     rows.forEach((r) => this.touch(r));
   }
 
-  relName(p) { const d = this.s.list?.path; return d && p.startsWith(d + "/") ? p.slice(d.length + 1) : p; }
+  relName(p) {
+    const d = this.s.list?.path;
+    if (d) return p.startsWith(d + "/") ? p.slice(d.length + 1) : p;
+    const top = this.s.paths.find((x) => p.startsWith(x + "/")); // più cartelle: nome a partire dalla cartella scelta
+    return top ? `${base(top)}/${p.slice(top.length + 1)}` : p;
+  }
 
   // un brano cambia percorso (rinominato o annullato): si aggiornano elenco, selezione e scheda
   move(r, to) {
@@ -864,10 +929,14 @@ progress { width: 120px; }
 .tr .num { text-align: right; color: var(--secondary-text-color); }
 .c-st { display: flex; align-items: center; gap: 2px; padding: 0 2px !important; }
 .c-st input { margin: 0; }
+.c-st .pl { border: none; background: none; padding: 0 2px; color: var(--primary-color); font-size: 12px; cursor: pointer; }
+#dplay { position: sticky; top: -10px; z-index: 2; background: var(--card-background-color); padding: 4px 0 6px; margin-top: -4px; }
+#dplay audio { width: 100%; height: 36px; }
+.tc { margin: 0 4px 0 0; flex: none; }
 .st { display: inline-block; width: 16px; text-align: center; font-weight: 700; color: var(--secondary-text-color); }
 .st.ok { color: #2e7d32; } .st.mid { color: #ef6c00; } .st.ko { color: var(--error-color, #c62828); } .st.run { color: #1976d2; } .st.done { color: #2e7d32; }
 .prop { color: #2e7d32; }
-.dup { font-size: 10px; background: rgba(255,152,0,.35); color: var(--primary-text-color); padding: 1px 5px; border-radius: 8px; font-weight: 600; }
+.dup { cursor: help; font-size: 10px; background: rgba(255,152,0,.35); color: var(--primary-text-color); padding: 1px 5px; border-radius: 8px; font-weight: 600; }
 #det { width: 380px; flex: none; overflow: auto; border-left: 1px solid var(--divider-color); padding: 10px; box-sizing: border-box; background: var(--card-background-color); }
 .dh { display: flex; align-items: flex-start; gap: 8px; } .dh b { flex: 1; word-break: break-all; font-size: 14px; }
 .ic { padding: 4px 8px; }

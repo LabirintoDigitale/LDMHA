@@ -163,6 +163,24 @@ def guess_from_name(path: str, tags: dict[str, str]) -> tuple[str, str, list[str
     return artist, title or _useful(name.strip()), folders
 
 
+def _norm(s: str) -> str:
+    s = re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", (s or "").lower())
+    s = re.sub(r"\b(feat|ft)\.?\b.*$", " ", s)
+    return re.sub(r"[^0-9a-zàèéìòù]+", " ", s).strip()
+
+
+def similar(a: str, b: str) -> float:
+    """Quanto si somigliano due titoli (o artisti), da 0 a 1, senza maiuscole, parentesi e punteggiatura."""
+    a, b = _norm(a), _norm(b)
+    if not a or not b:
+        return 0.0
+    if a == b or (len(a) > 3 and a in b) or (len(b) > 3 and b in a):
+        return 1.0
+    import difflib
+
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
 def _lucene(s: str) -> str:
     return re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", s)
 
@@ -248,7 +266,7 @@ class Identifier:
                 out.append({
                     "mbid": rec["id"], "title": rec.get("title", ""), "artist": _acoustid_artist(rec.get("artists")),
                     "album": rg.get("title", ""), "albumartist": _acoustid_artist(rg.get("artists")),
-                    "year": "", "track": "", "duration": rec.get("duration") or 0,
+                    "year": "", "track": "", "duration": round(float(rec.get("duration") or 0)),
                     "score": round(score, 3), "source": "impronta", "cover": _cover_rg(rg.get("id", "")),
                 })
         # stesso titolo e artista registrati più volte: resta il primo
@@ -282,6 +300,43 @@ class Identifier:
             for c in out:
                 c["score"] = round(c["score"] * 0.7, 3)
         return out
+
+    @staticmethod
+    def _rerank(path: str, tags: dict[str, str], duration: int, cands: list[dict[str, Any]],
+                log: list[str]) -> list[dict[str, Any]]:
+        """AcoustID spesso collega la stessa impronta a più brani dello stesso artista, tutti al 99%: si mette per
+        prima la proposta che somiglia al titolo (e all'artista) già nel file o nel nome del file, con la durata
+        giusta. Le proposte con un titolo diverso perdono sicurezza (così non finiscono in «Applica i sicuri»)."""
+        artist, title, _hints = guess_from_name(path, tags)
+        if not title and not duration:
+            return cands
+        first = cands[0].get("mbid")
+        for c in cands:
+            f = 1.0
+            why = []
+            if title:
+                s = similar(title, c.get("title", ""))
+                if s < 0.5:
+                    f *= 0.6
+                    why.append("titolo diverso")
+                elif s < 0.8:
+                    f *= 0.85
+                    why.append("titolo simile")
+            if artist and c.get("artist") and similar(artist, c["artist"]) < 0.5:
+                f *= 0.8
+                why.append("artista diverso")
+            if duration and c.get("duration") and abs(float(c["duration"]) - duration) > 10:
+                f *= 0.85
+                why.append("durata diversa")
+            c.setdefault("fp_score", c["score"])
+            c["score"] = round(c["fp_score"] * f, 3)
+            if why:
+                c["why"] = ", ".join(why)
+        cands.sort(key=lambda c: -c["score"])
+        if cands[0].get("mbid") != first:
+            log.append(f"Proposte riordinate confrontandole con il file («{title or '?'}»"
+                       + (f", {artist}" if artist else "") + f"): la prima ora è «{cands[0]['artist']} — {cands[0]['title']}»")
+        return cands
 
     async def by_shazam(self, path: str, log: list[str], duration: int = 0) -> list[dict[str, Any]]:
         """Seconda possibilità con Shazam; i dettagli (album, anno, numero) da MusicBrainz tramite il codice ISRC."""
@@ -371,6 +426,8 @@ class Identifier:
                     log.append(f"AcoustID non disponibile: {err}")
                     note = ("Chiave AcoustID non valida: va messa la chiave dell'APPLICAZIONE (opzioni dell'integrazione)"
                             if self.key_error else str(err))
+        if cands:
+            cands = self._rerank(path, tags, duration, cands, log)
         if cands:
             log.append(f"Proposte dall'audio: {len(cands)}; la prima è «{cands[0]['artist']} — {cands[0]['title']}»")
             t0 = time.monotonic()

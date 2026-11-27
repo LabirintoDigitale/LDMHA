@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -301,6 +301,25 @@ async def _download_cover(hass: HomeAssistant, url: str) -> tuple[bytes, str]:
     if len(data) > 8 * 1024 * 1024:
         raise LibraryError("Copertina troppo grande")
     return data, mime
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/audio", vol.Required("path"): str})
+@websocket_api.async_response
+async def ws_audio(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Indirizzo firmato (valido 2 ore) per ascoltare il brano nel browser."""
+    async def go() -> dict[str, Any]:
+        from datetime import timedelta
+
+        from homeassistant.components.http.auth import async_sign_path
+
+        from .audio import audio_key
+
+        real = await hass.async_add_executor_job(_data(hass).library.check, msg["path"])
+        url = async_sign_path(hass, f"/api/ldmha/audio/{audio_key(real)}", timedelta(hours=2),
+                              refresh_token_id=connection.refresh_token_id)
+        return {"url": url}
+    await _run(connection, msg["id"], go())
 
 
 @websocket_api.require_admin
