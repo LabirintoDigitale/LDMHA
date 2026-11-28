@@ -67,6 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     from .jobs import Jobs
 
     entry.runtime_data.jobs = Jobs(hass, entry.runtime_data)
+    await entry.runtime_data.jobs.async_load()  # lavoro interrotto da un riavvio: torna in pausa
     from .ratings import Ratings
 
     entry.runtime_data.ratings = Ratings(library)
@@ -115,7 +116,7 @@ async def _async_reload(hass: HomeAssistant, entry: LdmhaConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> bool:
     if entry.runtime_data.jobs:
-        entry.runtime_data.jobs.stop()
+        entry.runtime_data.jobs.stop(reason="riavvio")
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     frontend.async_remove_panel(hass, PANEL_URL)
     hass.data.pop(DOMAIN, None)

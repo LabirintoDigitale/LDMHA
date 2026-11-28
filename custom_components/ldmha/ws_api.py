@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_rating_get, ws_rating_set, ws_job_start, ws_job_stop, ws_job_subscribe, ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_job_resume, ws_job_cancel, ws_rating_get, ws_rating_set, ws_job_start, ws_job_stop, ws_job_subscribe, ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -186,17 +186,27 @@ def _schedule_playlists(hass: HomeAssistant) -> None:
 
 # ---------------------------------------------------------------- pannello (solo amministratori)
 @websocket_api.require_admin
-@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_start", vol.Required("paths"): [str]})
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/job_start",
+    vol.Optional("kind", default="identify"): vol.In(["identify", "apply"]),
+    vol.Optional("paths", default=[]): [str],  # riconoscimento
+    vol.Optional("items", default=[]): [vol.Schema({vol.Required("path"): str, vol.Optional("tags", default={}): TAGS,
+                                                    vol.Optional("pattern", default=""): str,
+                                                    vol.Optional("cover", default=""): str,
+                                                    vol.Optional("cover_if_missing", default=True): bool},
+                                                   extra=vol.REMOVE_EXTRA)],  # applica
+})
 @callback
 def ws_job_start(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Riconosce questi brani dentro Home Assistant (continua anche a pannello chiuso)."""
+    """Riconosce o applica questi brani dentro Home Assistant (continua anche a pannello chiuso)."""
+    items = msg["items"] if msg["kind"] == "apply" else [{"path": p} for p in msg["paths"]]
     try:
-        ok = _data(hass).jobs.start(msg["paths"])
+        ok = _data(hass).jobs.start(msg["kind"], items)
     except LibraryError as err:
         connection.send_error(msg["id"], "ldmha_error", str(err))
         return
     if not ok:
-        connection.send_error(msg["id"], "ldmha_error", "C'è già un riconoscimento in corso")
+        connection.send_error(msg["id"], "ldmha_error", "C'è già un lavoro in corso (o in pausa: riprendilo o annullalo)")
         return
     connection.send_result(msg["id"])
 
@@ -209,6 +219,24 @@ def ws_job_stop(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
         _data(hass).jobs.stop()
     except LibraryError:
         pass
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_resume"})
+@callback
+def ws_job_resume(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    if not _data(hass).jobs.resume():
+        connection.send_error(msg["id"], "ldmha_error", "Niente da riprendere")
+        return
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/job_cancel"})
+@callback
+def ws_job_cancel(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    _data(hass).jobs.cancel()
     connection.send_result(msg["id"])
 
 
@@ -364,21 +392,12 @@ def ws_preview(hass: HomeAssistant, connection: websocket_api.ActiveConnection, 
     connection.send_result(msg["id"], {"items": out})
 
 
-@websocket_api.require_admin
-@websocket_api.websocket_command({
-    vol.Required("type"): "ldmha/apply",
-    vol.Required("path"): str,
-    vol.Optional("tags", default={}): TAGS,
-    vol.Optional("pattern", default=""): str,
-    vol.Optional("cover", default=""): str,  # indirizzo della copertina da mettere nel file (vuoto = non toccarla)
-    vol.Optional("cover_if_missing", default=True): bool,  # solo se il file non ne ha già una
-})
-@websocket_api.async_response
-async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    """Scrive i tag e (con uno schema) dà il nome nuovo al file."""
-    async def go() -> dict[str, Any]:
-        d = _data(hass)
-        tags = {k: v for k, v in msg["tags"].items() if v}
+async def apply_one(hass: HomeAssistant, d, path: str, tags_in: dict, pattern: str, cover_url: str,
+                    cover_if_missing: bool) -> dict[str, Any]:
+    """Applica tag, nome nuovo e copertina a un brano (dal pannello o dal lavoro dentro Home Assistant)."""
+    msg = {"path": path, "pattern": pattern, "cover": cover_url, "cover_if_missing": cover_if_missing}
+    if True:
+        tags = {k: v for k, v in (tags_in or {}).items() if v and k in TAG_KEYS}
         name = None
         if msg["pattern"].strip():
             cur = await hass.async_add_executor_job(read_tags, d.library.check(msg["path"]))
@@ -400,6 +419,23 @@ async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
         if warn:
             res["warning"] = "; ".join(x for x in (warn, res.get("warning", "")) if x)
         return res
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/apply",
+    vol.Required("path"): str,
+    vol.Optional("tags", default={}): TAGS,
+    vol.Optional("pattern", default=""): str,
+    vol.Optional("cover", default=""): str,  # indirizzo della copertina da mettere nel file (vuoto = non toccarla)
+    vol.Optional("cover_if_missing", default=True): bool,  # solo se il file non ne ha già una
+})
+@websocket_api.async_response
+async def ws_apply(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Scrive i tag e (con uno schema) dà il nome nuovo al file."""
+    async def go() -> dict[str, Any]:
+        return await apply_one(hass, _data(hass), msg["path"], msg["tags"], msg["pattern"], msg["cover"],
+                               msg["cover_if_missing"])
     await _run(connection, msg["id"], go())
 
 

@@ -5,7 +5,7 @@
 // selezione multipla e scheda di dettaglio del brano aperto.
 
 // deve coincidere con VERSION in const.py: se il backend ne riporta un'altra manca un riavvio
-const PANEL_VERSION = "0.9.0";
+const PANEL_VERSION = "0.9.1";
 const ICON = new URL("./icon.png", import.meta.url).href;
 const STORE_KEY = "ldmha-panel";
 const SAFE = 0.9; // sopra questa sicurezza (impronta audio) il brano si può sistemare in automatico
@@ -148,6 +148,9 @@ class LdmhaPanel extends HTMLElement {
       </div>
       <div class="bar acts">
         ${run ? `<button id="stop" class="pri">■ Ferma ${esc(this.s.runLabel || "")} (${this.s.done}/${this.s.total})</button><progress max="${this.s.total}" value="${this.s.done}"></progress>${this.s.job ? `<span id="working" class="hint wk">${esc(this.workingText())}</span>` : ""}`
+          : this.s.paused ? `<span class="paused">⏸ ${this.s.paused.label === "applico" ? "Applica" : "Riconoscimento"} ${this.s.paused.reason === "riavvio" ? "interrotto dal riavvio di Home Assistant" : "in pausa"}: <b>${this.s.paused.remaining}</b> brani da fare</span>
+              <button id="jresume" class="pri">▶ Riprendi</button><button id="jcancel">✕ Annulla</button>
+              <button id="idall" ${n ? "" : "disabled"}>Riconosci selezionati${n ? ` (${n})` : ""}</button>`
           : `<button id="idall" class="pri" ${n ? "" : "disabled"} title="Riconosce i brani selezionati non ancora riconosciuti (se lo sono già tutti, chiede se rifarli)">Riconosci selezionati${n ? ` (${n})` : ""}</button>`}
         <button id="safe" ${run ? `disabled title="Aspetta che finisca (o premi Ferma)"` : `title="Applica tag e nome ai brani riconosciuti dall'audio con sicurezza ≥ ${pct(SAFE)}"`}>Applica i sicuri</button>
         <span class="sep"></span>
@@ -172,7 +175,11 @@ class LdmhaPanel extends HTMLElement {
       if (this.s.job) this.ws({ type: "ldmha/job_stop" }).catch(() => {}); // riconoscimento dentro Home Assistant
       else this.s.running = false;
     };
-    else $("idall").onclick = () => {
+    if (!run && this.s.paused) {
+      $("jresume").onclick = () => this.ws({ type: "ldmha/job_resume" }).catch((e) => alert(e.message || e));
+      $("jcancel").onclick = () => { if (confirm(`Annullare il lavoro in pausa? I ${this.s.paused.remaining} brani rimasti non verranno fatti.`)) this.ws({ type: "ldmha/job_cancel" }).catch(() => {}); };
+    }
+    if (!run) $("idall").onclick = () => {
       const sel = this.selected().filter((r) => r.status !== "fatto" && r.status !== "cestino");
       let todo = sel.filter((r) => ["nuovo", "errore", "nontrovato"].includes(r.status));
       if (!todo.length && sel.length) {
@@ -760,6 +767,7 @@ class LdmhaPanel extends HTMLElement {
   async identifyMany(list) {
     list = list.filter((r) => r.status !== "cestino");
     if (!list.length || this.s.running) return;
+    if (!this.okToReplacePaused()) return;
     try {
       await this.ws({ type: "ldmha/job_start", paths: list.map((r) => r.file.path) });
       this.log(`Riconoscimento avviato dentro Home Assistant: ${list.length} brani (continua anche a pannello chiuso)`);
@@ -776,11 +784,14 @@ class LdmhaPanel extends HTMLElement {
     if (ev.type === "state") {
       const was = this.s.job;
       this.s.job = !!ev.running;
-      this.s.running = !!ev.running || (this.s.running && !was && this.s.runLabel !== "riconosco");
-      if (ev.running) { this.s.runLabel = "riconosco"; this.s.done = ev.done; this.s.total = ev.total; this.s.working = ev.working || []; this.s.steps = ev.steps || {}; }
+      this.s.running = !!ev.running || (this.s.running && !was && !["riconosco", "applico"].includes(this.s.runLabel));
+      if (ev.running) { this.s.runLabel = ev.label || "riconosco"; this.s.done = ev.done; this.s.total = ev.total; this.s.working = ev.working || []; this.s.steps = ev.steps || {}; }
+      // lavoro in pausa (fermato, o interrotto da un riavvio di Home Assistant): si può riprendere o annullare
+      this.s.paused = !ev.running && ev.paused && ev.remaining ? { remaining: ev.remaining, reason: ev.reason, label: ev.label, done: ev.done, total: ev.total } : null;
       if (was && !ev.running) {
-        this.log(`Riconoscimento ${ev.stopped ? "fermato" : "finito"}: ${ev.done} brani su ${ev.total}`);
+        this.log(`${ev.label === "applico" ? "Applica" : "Riconoscimento"} ${ev.paused ? `in pausa (${ev.remaining} da fare)` : "finito"}: ${ev.done} brani su ${ev.total}`);
         this.refreshView();
+        this.refreshTree();
       }
       this.renderTop();
       return;
@@ -795,6 +806,7 @@ class LdmhaPanel extends HTMLElement {
     }
     if (ev.type !== "result") return;
     this.s.done = ev.done; this.s.total = ev.total;
+    if (ev.kind === "apply") { this.applyResult(ev); return; }
     const pb = this.shadowRoot.querySelector("#top progress");
     const sb = this.shadowRoot.getElementById("stop");
     if (pb) pb.value = ev.done;
@@ -933,10 +945,41 @@ class LdmhaPanel extends HTMLElement {
     alert(msg);
   }
 
+  // Applica su tanti brani: dentro Home Assistant (continua a pagina chiusa; Ferma = pausa, si riprende)
   async applyMany(list) {
     if (!list.length) return;
-    if (!confirm(`Applicare tag${this.s.pattern ? " e nome nuovo" : ""} a ${list.length} brani?\n(Ogni modifica si può annullare dalla cronologia.)`)) return;
-    await this.runMany("applico", list, (r) => this.apply(r));
+    if (!confirm(`Applicare tag${this.s.pattern ? " e nome nuovo" : ""} a ${list.length} brani?\n(Ogni modifica si può annullare dalla cronologia. Continua anche chiudendo la pagina.)`)) return;
+    if (!this.okToReplacePaused()) return;
+    const cover = (r) => (this.s.cover !== "mai" && r.cand?.cover ? r.cand.cover : "");
+    const items = list.map((r) => ({ path: r.file.path, tags: r.edit, pattern: this.s.pattern, cover: cover(r), cover_if_missing: this.s.cover !== "sempre" }));
+    try {
+      await this.ws({ type: "ldmha/job_start", kind: "apply", items });
+      for (const r of list) { r.status = "salvo"; this.touch(r); }
+      this.log(`Applica avviato dentro Home Assistant: ${list.length} brani`);
+    } catch (e) { alert(e.message || e); }
+  }
+
+  okToReplacePaused() {
+    const p = this.s.paused;
+    return !p || confirm(`C'è un lavoro in pausa («${p.label}», ${p.remaining} brani da fare). Sostituirlo con questo?`);
+  }
+
+  // risultato di un Applica fatto dentro Home Assistant
+  applyResult(ev) {
+    const r = this.rows.get(ev.path);
+    if (!r) return;
+    if (ev.error) {
+      r.status = "trovato"; r.err = ev.error;
+      this.log(`Applica non riuscito: ${ev.error}`, ev.path, "ko");
+    } else {
+      const res = ev.res || {};
+      const old = r.file.path;
+      this.move(r, res.path);
+      r.file.tags = res.tags; r.entry = res.entry; r.status = "fatto"; r.fileCover = undefined; r.err = "";
+      this.log(`Tag scritti${old !== res.path ? `, rinominato in «${base(res.path)}»` : ""}${res.warning ? ` (${res.warning})` : ""}`, old, "ok");
+      this.settled(r);
+    }
+    this.touch(r);
   }
 
   applySafe() {
@@ -1064,6 +1107,7 @@ button.pri { background: var(--primary-color); color: var(--text-primary-color, 
 .sep { width: 1px; height: 20px; background: var(--divider-color); margin: 0 4px; }
 .grow { flex: 1; text-align: right; }
 progress { width: 120px; }
+.paused { background: rgba(255,152,0,.18); padding: 4px 8px; border-radius: 6px; }
 .wk { max-width: 620px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hint, .mut { color: var(--secondary-text-color); } .small { font-size: 12px; }
 .note { padding: 24px; text-align: center; color: var(--secondary-text-color); }
