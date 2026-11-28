@@ -27,7 +27,7 @@ TAGS = vol.Schema({vol.Optional(k): vol.Any(None, vol.Coerce(str)) for k in TAG_
 def async_setup(hass: HomeAssistant) -> None:
     if hass.data.get(DATA_WS_REGISTERED):
         return
-    for handler in (ws_job_start, ws_job_stop, ws_job_subscribe, ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
+    for handler in (ws_rating_get, ws_rating_set, ws_job_start, ws_job_stop, ws_job_subscribe, ws_player_register, ws_player_subscribe, ws_player_state, ws_info, ws_cover, ws_fix_cover, ws_audio, ws_dirs, ws_list, ws_scan, ws_forget, ws_identify, ws_search, ws_preview, ws_apply, ws_trash, ws_history, ws_undo):
         websocket_api.async_register_command(hass, handler)
     hass.data[DATA_WS_REGISTERED] = True
 
@@ -113,6 +113,75 @@ def ws_player_state(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         connection.send_error(msg["id"], "ldmha_error", str(err))
         return
     connection.send_result(msg["id"])
+
+
+# ---------------------------------------------------------------- valutazioni da MusikHa
+# Seconda eccezione, confermata dal proprietario: voto a stelle aperto a tutti gli utenti (MusikHa può accedere con
+# un utente non amministratore). Tocca SOLO il campo valutazione del file che sta suonando sul lettore indicato
+# (percorso chiesto a Music Assistant, mai passato dall'app); i voti sono visibili a tutti.
+async def _playing_file(hass: HomeAssistant, entity_id: str) -> str:
+    try:
+        resp = await hass.services.async_call("music_assistant", "get_queue", {"entity_id": entity_id},
+                                              blocking=True, return_response=True)
+    except Exception as err:  # noqa: BLE001 - lettore non di Music Assistant o Music Assistant assente
+        raise LibraryError(f"Coda del lettore non disponibile: {err}") from err
+    q = (resp or {}).get(entity_id) or next(iter((resp or {}).values()), {}) or {}
+    sd = ((q.get("current_item") or {}).get("stream_details") or {})
+    if not sd.get("item_id") or "filesystem" not in str(sd.get("provider", "")):
+        raise LibraryError("Il brano in ascolto non è un file del NAS o del disco")
+    return await hass.async_add_executor_job(_data(hass).ratings.resolve, str(sd.get("provider")), str(sd["item_id"]))
+
+
+def _user(connection) -> tuple[str, str]:
+    u = connection.user
+    return u.id, (u.name or "utente")
+
+
+@websocket_api.websocket_command({vol.Required("type"): "ldmha/rating_get", vol.Required("entity_id"): str})
+@websocket_api.async_response
+async def ws_rating_get(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    async def go() -> dict[str, Any]:
+        path = await _playing_file(hass, msg["entity_id"])
+        uid, _name = _user(connection)
+        return await hass.async_add_executor_job(_data(hass).ratings.summary, path, uid)
+    await _run(connection, msg["id"], go())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "ldmha/rating_set",
+    vol.Required("entity_id"): str,
+    vol.Required("stars"): vol.All(vol.Coerce(int), vol.Range(min=0, max=5)),  # 0 = togli il mio voto
+})
+@websocket_api.async_response
+async def ws_rating_set(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    async def go() -> dict[str, Any]:
+        d = _data(hass)
+        path = await _playing_file(hass, msg["entity_id"])
+        uid, name = _user(connection)
+        res = await hass.async_add_executor_job(d.ratings.vote, path, uid, name, msg["stars"])
+        _schedule_playlists(hass)
+        return res
+    await _run(connection, msg["id"], go())
+
+
+_PL_TIMER: dict[str, Any] = {}
+
+
+def _schedule_playlists(hass: HomeAssistant) -> None:
+    """Playlist delle stelle riscritte poco dopo l'ultimo voto (più voti di fila: una volta sola)."""
+    from homeassistant.helpers.event import async_call_later
+
+    if _PL_TIMER.get("cancel"):
+        _PL_TIMER["cancel"]()
+
+    async def _go(_now=None) -> None:
+        _PL_TIMER.pop("cancel", None)
+        try:
+            await hass.async_add_executor_job(_data(hass).ratings.write_playlists)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Playlist delle stelle non scritte")
+
+    _PL_TIMER["cancel"] = async_call_later(hass, 15, _go)
 
 
 # ---------------------------------------------------------------- pannello (solo amministratori)

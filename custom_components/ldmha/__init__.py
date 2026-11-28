@@ -47,6 +47,7 @@ class LdmhaData:
     identifier: Identifier
     players: Players
     jobs: Any = None  # Jobs: riconoscimento di tanti brani dentro Home Assistant
+    ratings: Any = None  # Ratings: stelle date da MusikHa
 
 
 type LdmhaConfigEntry = ConfigEntry[LdmhaData]
@@ -66,6 +67,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: LdmhaConfigEntry) -> boo
     from .jobs import Jobs
 
     entry.runtime_data.jobs = Jobs(hass, entry.runtime_data)
+    from .ratings import Ratings
+
+    entry.runtime_data.ratings = Ratings(library)
     hass.data[DOMAIN] = entry
 
     # "servizio" nella scheda dell'integrazione: mostra la versione installata

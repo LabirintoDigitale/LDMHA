@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS scans (
     count INTEGER,
     folders INTEGER
 );
+CREATE TABLE IF NOT EXISTS ratings (
+    path TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    user_name TEXT,
+    stars INTEGER NOT NULL,
+    t REAL,
+    PRIMARY KEY (path, user_id)
+);
 """
 
 
@@ -152,6 +160,7 @@ class Db:
             row = self._c.execute("SELECT ident FROM files WHERE path = ?", (old,)).fetchone()
             if old != new:
                 self._c.execute("DELETE FROM files WHERE path = ?", (old,))
+                self._c.execute("UPDATE OR REPLACE ratings SET path = ? WHERE path = ?", (new, old))
             self._c.execute(
                 "INSERT OR REPLACE INTO files(path, dir, size, mtime, tags, ident, applied, seen) VALUES (?,?,?,?,?,?,?,?)",
                 (new, os.path.dirname(new), size, mtime, json.dumps(tags, ensure_ascii=False), row[0] if row else None,
@@ -179,6 +188,29 @@ class Db:
                                           (a, b)).fetchone()
                 out[p] = (n or 0, done or 0)
         return out
+
+    # -------------------------------------------------------------- valutazioni (stelle per utente)
+    def set_rating(self, path: str, user_id: str, user_name: str, stars: int) -> None:
+        with self._lock:
+            self._c.execute("INSERT OR REPLACE INTO ratings(path, user_id, user_name, stars, t) VALUES (?,?,?,?,?)",
+                            (path, user_id, user_name, stars, time.time()))
+            self._c.commit()
+
+    def del_rating(self, path: str, user_id: str) -> None:
+        with self._lock:
+            self._c.execute("DELETE FROM ratings WHERE path = ? AND user_id = ?", (path, user_id))
+            self._c.commit()
+
+    def ratings_of(self, path: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._c.execute("SELECT user_id, user_name, stars FROM ratings WHERE path = ? ORDER BY user_name",
+                                   (path,)).fetchall()
+        return [{"user_id": u, "user_name": n or "utente", "stars": s} for u, n, s in rows]
+
+    def all_ratings(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._c.execute("SELECT path, user_id, user_name, stars FROM ratings").fetchall()
+        return [{"path": p, "user_id": u, "user_name": n or "utente", "stars": s} for p, u, n, s in rows]
 
     def stats(self) -> dict[str, Any]:
         with self._lock:
